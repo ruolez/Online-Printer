@@ -535,15 +535,29 @@ obtain_ssl_certificate() {
 
     cd "$INSTALL_DIR"
 
-    # Update nginx config with actual domain
-    sed -i "s/DOMAIN_NAME/$DOMAIN_NAME/g" nginx/nginx.prod.conf
+    # First, use the initial nginx config without SSL for certificate obtaining
+    print_message $YELLOW "Configuring nginx for certificate validation..."
 
-    # Ensure nginx is running
-    docker compose -f docker-compose.prod.yml up -d nginx
+    # Copy initial config to be used
+    cp nginx/nginx.initial.conf nginx/nginx.current.conf
+
+    # Update docker-compose to use current config
+    sed -i 's|./nginx/nginx.prod.conf|./nginx/nginx.current.conf|g' docker-compose.prod.yml
+
+    # Restart nginx with initial config
+    docker compose -f docker-compose.prod.yml restart nginx
 
     # Wait for nginx to start
     print_message $YELLOW "Waiting for nginx to start..."
-    sleep 5
+    sleep 10
+
+    # Test if port 80 is accessible
+    print_message $YELLOW "Testing HTTP accessibility..."
+    if curl -f -s -o /dev/null -w "%{http_code}" "http://$DOMAIN_NAME/.well-known/acme-challenge/test" | grep -q "404"; then
+        print_message $GREEN "HTTP is accessible, proceeding with certificate request..."
+    else
+        print_message $YELLOW "Warning: HTTP might not be accessible. Continuing anyway..."
+    fi
 
     # Always try to obtain certificate (certbot will handle if it exists)
     print_message $YELLOW "Obtaining certificate for $DOMAIN_NAME..."
@@ -559,16 +573,29 @@ obtain_ssl_certificate() {
         -d "$DOMAIN_NAME"
 
     if [[ $? -eq 0 ]]; then
-        print_message $GREEN "SSL certificate ready for $DOMAIN_NAME"
+        print_message $GREEN "SSL certificate obtained successfully!"
+
+        # Update nginx.prod.conf with actual domain
+        sed -i "s/DOMAIN_NAME/$DOMAIN_NAME/g" nginx/nginx.prod.conf
+
+        # Copy production config to be used
+        cp nginx/nginx.prod.conf nginx/nginx.current.conf
 
         # Restart nginx with SSL configuration
+        print_message $YELLOW "Restarting nginx with SSL configuration..."
         docker compose -f docker-compose.prod.yml restart nginx
+
+        sleep 5
+        print_message $GREEN "SSL configuration complete!"
     else
         print_message $RED "Failed to obtain SSL certificate"
-        print_message $YELLOW "The application will work on HTTP. To enable HTTPS:"
-        print_message $YELLOW "1. Ensure DNS is properly configured"
-        print_message $YELLOW "2. Run: cd $INSTALL_DIR && docker compose -f docker-compose.prod.yml run --rm certbot certonly --webroot --webroot-path=/var/www/certbot --email $EMAIL_ADDRESS --agree-tos --no-eff-email -d $DOMAIN_NAME"
-        print_message $YELLOW "3. Restart nginx: docker compose -f docker-compose.prod.yml restart nginx"
+        print_message $YELLOW "The application is running on HTTP. To enable HTTPS:"
+        print_message $YELLOW "1. Ensure DNS is properly configured and pointing to this server"
+        print_message $YELLOW "2. Ensure firewall allows port 80 and 443"
+        print_message $YELLOW "3. Run: cd $INSTALL_DIR && docker compose -f docker-compose.prod.yml run --rm --entrypoint=\"\" certbot certbot certonly --webroot --webroot-path=/var/www/certbot --email $EMAIL_ADDRESS --agree-tos --no-eff-email -d $DOMAIN_NAME"
+        print_message $YELLOW "4. After success: cp nginx/nginx.prod.conf nginx/nginx.current.conf"
+        print_message $YELLOW "5. Update domain in nginx.current.conf"
+        print_message $YELLOW "6. Restart nginx: docker compose -f docker-compose.prod.yml restart nginx"
     fi
 }
 
