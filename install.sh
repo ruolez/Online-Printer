@@ -784,7 +784,12 @@ initialize_database() {
 
     # Create database tables
     print_message $YELLOW "Creating database tables..."
-    docker compose -f docker-compose.prod.yml exec -T backend python -c "from app import app, db; with app.app_context(): db.create_all(); print('✓ Database tables created successfully')"
+    docker compose -f docker-compose.prod.yml exec -T backend python -c "
+from app import app, db
+with app.app_context():
+    db.create_all()
+    print('✓ Database tables created successfully')
+"
 
     # Run migrations
     if [[ -f "backend/migrations/add_printer_stations.py" ]]; then
