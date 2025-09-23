@@ -57,6 +57,9 @@ check_ubuntu_version() {
 
 # Function to check for existing installation
 check_existing_installation() {
+    # Ensure we're in a valid directory
+    cd /tmp
+
     if [[ -d "$INSTALL_DIR" ]]; then
         print_message $YELLOW "\nExisting installation detected at $INSTALL_DIR"
         echo "Please choose an option:"
@@ -328,21 +331,53 @@ generate_passwords() {
 setup_repository() {
     print_message $BLUE "\nSetting up application files..."
 
-    # Get the directory where the script is being run from
-    SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+    # Ensure we're in a valid directory first
+    cd /tmp
 
-    # If we're already in the install directory, use it directly
-    if [[ "$SCRIPT_DIR" == "$INSTALL_DIR" ]]; then
-        print_message $YELLOW "Using current directory as installation source"
+    # Get the directory where the script is being run from
+    # Handle case where current directory might not exist
+    if [[ -f "${BASH_SOURCE[0]}" ]]; then
+        SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" 2>/dev/null && pwd )"
+    fi
+
+    # If script dir couldn't be determined or doesn't exist, check common locations
+    if [[ -z "$SCRIPT_DIR" ]] || [[ ! -d "$SCRIPT_DIR" ]]; then
+        if [[ -d "/opt/Online-Printer" ]]; then
+            SCRIPT_DIR="/opt/Online-Printer"
+        elif [[ -d "/root/Online-Printer" ]]; then
+            SCRIPT_DIR="/root/Online-Printer"
+        elif [[ -d "/home/ubuntu/Online-Printer" ]]; then
+            SCRIPT_DIR="/home/ubuntu/Online-Printer"
+        else
+            print_message $RED "Cannot find application files. Please ensure you're running from the cloned repository."
+            exit 1
+        fi
+        print_message $YELLOW "Found application files at: $SCRIPT_DIR"
+    fi
+
+    # If we're already in the install directory or they're the same, just use it
+    if [[ "$SCRIPT_DIR" == "$INSTALL_DIR" ]] || [[ "$(realpath "$SCRIPT_DIR" 2>/dev/null)" == "$(realpath "$INSTALL_DIR" 2>/dev/null)" ]]; then
+        print_message $YELLOW "Application files already at installation directory"
+
+        # Ensure we're in the install directory
+        cd "$INSTALL_DIR"
     else
-        # Copy files from current directory to installation directory
+        # Copy files from script directory to installation directory
         print_message $YELLOW "Copying files from $SCRIPT_DIR to $INSTALL_DIR..."
 
-        # Create installation directory if it doesn't exist
+        # Remove install dir if it exists and is different
+        if [[ -d "$INSTALL_DIR" ]]; then
+            rm -rf "$INSTALL_DIR"
+        fi
+
+        # Create installation directory
         mkdir -p "$INSTALL_DIR"
 
-        # Copy all files except .git directory
-        rsync -av --exclude='.git' --exclude='node_modules' "$SCRIPT_DIR/" "$INSTALL_DIR/"
+        # Copy all files
+        cp -r "$SCRIPT_DIR"/* "$INSTALL_DIR"/ 2>/dev/null || cp -r "$SCRIPT_DIR"/. "$INSTALL_DIR"/
+
+        # Change to install directory
+        cd "$INSTALL_DIR"
     fi
 
     # Set permissions
