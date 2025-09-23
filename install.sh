@@ -535,32 +535,21 @@ obtain_ssl_certificate() {
 
     cd "$INSTALL_DIR"
 
-    # First, use the initial nginx config without SSL for certificate obtaining
-    print_message $YELLOW "Configuring nginx for certificate validation..."
-
-    # Copy initial config to be used
-    cp nginx/nginx.initial.conf nginx/nginx.current.conf
-
-    # Update docker-compose to use current config
-    sed -i 's|./nginx/nginx.prod.conf|./nginx/nginx.current.conf|g' docker-compose.prod.yml
-
-    # Restart nginx with initial config
-    docker compose -f docker-compose.prod.yml restart nginx
-
-    # Wait for nginx to start
-    print_message $YELLOW "Waiting for nginx to start..."
-    sleep 10
+    # nginx should already be running with HTTP config from start_application
+    # Just ensure it's up
+    docker compose -f docker-compose.prod.yml up -d nginx
+    sleep 5
 
     # Test if port 80 is accessible
     print_message $YELLOW "Testing HTTP accessibility..."
-    if curl -f -s -o /dev/null -w "%{http_code}" "http://$DOMAIN_NAME/.well-known/acme-challenge/test" | grep -q "404"; then
+    if curl -f -s -o /dev/null "http://$DOMAIN_NAME/" 2>/dev/null; then
         print_message $GREEN "HTTP is accessible, proceeding with certificate request..."
     else
-        print_message $YELLOW "Warning: HTTP might not be accessible. Continuing anyway..."
+        print_message $YELLOW "Warning: HTTP might not be accessible externally. Continuing anyway..."
     fi
 
-    # Always try to obtain certificate (certbot will handle if it exists)
-    print_message $YELLOW "Obtaining certificate for $DOMAIN_NAME..."
+    # Obtain certificate
+    print_message $YELLOW "Requesting certificate for $DOMAIN_NAME..."
 
     # Run certbot with explicit entrypoint override to obtain certificate
     docker compose -f docker-compose.prod.yml run --rm --entrypoint="" certbot certbot certonly \
@@ -575,27 +564,91 @@ obtain_ssl_certificate() {
     if [[ $? -eq 0 ]]; then
         print_message $GREEN "SSL certificate obtained successfully!"
 
-        # Update nginx.prod.conf with actual domain
-        sed -i "s/DOMAIN_NAME/$DOMAIN_NAME/g" nginx/nginx.prod.conf
+        # Create SSL-enabled nginx configuration
+        print_message $YELLOW "Creating SSL configuration..."
 
-        # Copy production config to be used
-        cp nginx/nginx.prod.conf nginx/nginx.current.conf
+        cat > nginx/nginx.current.conf << EOF
+upstream backend {
+    server backend:5000;
+}
+
+# HTTP server - redirect to HTTPS
+server {
+    listen 80;
+    listen [::]:80;
+    server_name $DOMAIN_NAME;
+
+    location /.well-known/acme-challenge/ {
+        root /var/www/certbot;
+    }
+
+    location / {
+        return 301 https://\$host\$request_uri;
+    }
+}
+
+# HTTPS server
+server {
+    listen 443 ssl http2;
+    listen [::]:443 ssl http2;
+    server_name $DOMAIN_NAME;
+
+    ssl_certificate /etc/letsencrypt/live/$DOMAIN_NAME/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/$DOMAIN_NAME/privkey.pem;
+
+    ssl_session_timeout 1d;
+    ssl_session_cache shared:SSL:50m;
+    ssl_session_tickets off;
+
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384;
+    ssl_prefer_server_ciphers off;
+
+    add_header Strict-Transport-Security "max-age=63072000" always;
+    add_header X-Frame-Options "SAMEORIGIN" always;
+    add_header X-Content-Type-Options "nosniff" always;
+
+    root /usr/share/nginx/html;
+    index index.html;
+
+    client_max_body_size 100M;
+
+    location /api {
+        proxy_pass http://backend;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_buffering off;
+    }
+
+    location /health {
+        proxy_pass http://backend/health;
+        access_log off;
+    }
+
+    location / {
+        try_files \$uri \$uri/ /index.html;
+    }
+}
+EOF
 
         # Restart nginx with SSL configuration
-        print_message $YELLOW "Restarting nginx with SSL configuration..."
+        print_message $YELLOW "Applying SSL configuration..."
         docker compose -f docker-compose.prod.yml restart nginx
 
         sleep 5
-        print_message $GREEN "SSL configuration complete!"
+        print_message $GREEN "SSL configuration complete! Your application is now available at https://$DOMAIN_NAME"
     else
         print_message $RED "Failed to obtain SSL certificate"
-        print_message $YELLOW "The application is running on HTTP. To enable HTTPS:"
-        print_message $YELLOW "1. Ensure DNS is properly configured and pointing to this server"
-        print_message $YELLOW "2. Ensure firewall allows port 80 and 443"
-        print_message $YELLOW "3. Run: cd $INSTALL_DIR && docker compose -f docker-compose.prod.yml run --rm --entrypoint=\"\" certbot certbot certonly --webroot --webroot-path=/var/www/certbot --email $EMAIL_ADDRESS --agree-tos --no-eff-email -d $DOMAIN_NAME"
-        print_message $YELLOW "4. After success: cp nginx/nginx.prod.conf nginx/nginx.current.conf"
-        print_message $YELLOW "5. Update domain in nginx.current.conf"
-        print_message $YELLOW "6. Restart nginx: docker compose -f docker-compose.prod.yml restart nginx"
+        print_message $YELLOW "The application is running on HTTP at http://$DOMAIN_NAME"
+        print_message $YELLOW ""
+        print_message $YELLOW "To retry SSL setup later:"
+        print_message $YELLOW "1. Ensure DNS is properly configured (pointing to this server's IP)"
+        print_message $YELLOW "2. Run: cd $INSTALL_DIR && ./scripts/setup-ssl.sh $DOMAIN_NAME $EMAIL_ADDRESS"
     fi
 }
 
@@ -762,11 +815,72 @@ EOF
     print_message $GREEN "Systemd services configured"
 }
 
+# Function to prepare nginx configuration
+prepare_nginx_config() {
+    print_message $BLUE "\nPreparing nginx configuration..."
+
+    cd "$INSTALL_DIR"
+
+    # Create initial HTTP-only nginx config for certificate obtaining
+    cat > nginx/nginx.current.conf << 'EOF'
+upstream backend {
+    server backend:5000;
+}
+
+# HTTP server for initial certificate obtaining
+server {
+    listen 80;
+    listen [::]:80;
+    server_name _;
+
+    # Root directory for static files
+    root /usr/share/nginx/html;
+    index index.html;
+
+    # Allow Let's Encrypt challenges
+    location /.well-known/acme-challenge/ {
+        root /var/www/certbot;
+    }
+
+    # API proxy
+    location /api {
+        proxy_pass http://backend;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_buffering off;
+    }
+
+    # Health check endpoint
+    location /health {
+        proxy_pass http://backend/health;
+        access_log off;
+    }
+
+    # SPA routing
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+}
+EOF
+
+    print_message $GREEN "Initial nginx configuration created"
+}
+
 # Function to start application
 start_application() {
     print_message $BLUE "\nStarting application..."
 
     cd "$INSTALL_DIR"
+
+    # Ensure nginx config exists before starting
+    if [[ ! -f "nginx/nginx.current.conf" ]]; then
+        prepare_nginx_config
+    fi
 
     # Build and start all services
     docker compose -f docker-compose.prod.yml build
