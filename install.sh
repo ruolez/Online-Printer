@@ -327,6 +327,10 @@ generate_passwords() {
 clone_repository() {
     print_message $BLUE "\nSetting up application files..."
 
+    # Ensure parent directory exists and we're in a valid directory
+    mkdir -p "$(dirname "$INSTALL_DIR")"
+    cd /tmp
+
     # Clone from current directory to production location
     if [[ -d "/Users/ruolez/Desktop/Dev/printer.online" ]]; then
         # We're running from the development directory
@@ -341,6 +345,8 @@ clone_repository() {
         case $choice in
             1)
                 read -p "Enter Git repository URL: " REPO_URL
+                # Remove existing directory if it exists (empty from previous attempt)
+                rm -rf "$INSTALL_DIR"
                 git clone "$REPO_URL" "$INSTALL_DIR"
                 ;;
             2)
@@ -356,7 +362,7 @@ clone_repository() {
     fi
 
     # Set permissions
-    chown -R root:docker "$INSTALL_DIR"
+    chown -R root:docker "$INSTALL_DIR" 2>/dev/null || chown -R root:root "$INSTALL_DIR"
     chmod -R 755 "$INSTALL_DIR"
 
     print_message $GREEN "Application files ready"
