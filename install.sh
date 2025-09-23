@@ -122,7 +122,7 @@ remove_existing_installation() {
     # Stop and remove Docker containers
     if [[ -f "$INSTALL_DIR/docker-compose.prod.yml" ]]; then
         cd "$INSTALL_DIR"
-        docker-compose -f docker-compose.prod.yml down -v || true
+        docker compose -f docker-compose.prod.yml down -v || true
     fi
 
     # Remove installation directory
@@ -147,8 +147,8 @@ update_existing_installation() {
     fi
 
     # Rebuild and restart containers
-    docker-compose -f docker-compose.prod.yml build
-    docker-compose -f docker-compose.prod.yml up -d
+    docker compose -f docker-compose.prod.yml build
+    docker compose -f docker-compose.prod.yml up -d
 
     print_message $GREEN "Update completed"
 }
@@ -486,13 +486,13 @@ obtain_ssl_certificate() {
     sed -i "s/DOMAIN_NAME/$DOMAIN_NAME/g" nginx/nginx.prod.conf
 
     # Start nginx temporarily for certificate generation
-    docker-compose -f docker-compose.prod.yml up -d nginx
+    docker compose -f docker-compose.prod.yml up -d nginx
 
     # Wait for nginx to start
     sleep 5
 
     # Obtain certificate
-    docker-compose -f docker-compose.prod.yml run --rm certbot certonly \
+    docker compose -f docker-compose.prod.yml run --rm certbot certonly \
         --webroot \
         --webroot-path=/var/www/certbot \
         --email "$EMAIL_ADDRESS" \
@@ -519,8 +519,8 @@ create_maintenance_scripts() {
     cat > "$INSTALL_DIR/scripts/renew-ssl.sh" << 'EOF'
 #!/bin/bash
 cd /opt/printer.online
-docker-compose -f docker-compose.prod.yml run --rm certbot renew
-docker-compose -f docker-compose.prod.yml exec nginx nginx -s reload
+docker compose -f docker-compose.prod.yml run --rm certbot renew
+docker compose -f docker-compose.prod.yml exec nginx nginx -s reload
 EOF
 
     # Backup script
@@ -556,9 +556,9 @@ EOF
 DOMAIN=$(grep DOMAIN_NAME /opt/printer.online/.env | cut -d'=' -f2)
 
 # Check if all containers are running
-if ! docker-compose -f /opt/printer.online/docker-compose.prod.yml ps | grep -q "Up"; then
+if ! docker compose -f /opt/printer.online/docker-compose.prod.yml ps | grep -q "Up"; then
     echo "Some containers are down!"
-    docker-compose -f /opt/printer.online/docker-compose.prod.yml ps
+    docker compose -f /opt/printer.online/docker-compose.prod.yml ps
     exit 1
 fi
 
@@ -585,8 +585,8 @@ if [[ -d .git ]]; then
 fi
 
 # Rebuild and restart containers
-docker-compose -f docker-compose.prod.yml build
-docker-compose -f docker-compose.prod.yml up -d
+docker compose -f docker-compose.prod.yml build
+docker compose -f docker-compose.prod.yml up -d
 
 echo "Update completed"
 EOF
@@ -679,19 +679,19 @@ start_application() {
     cd "$INSTALL_DIR"
 
     # Build and start all services
-    docker-compose -f docker-compose.prod.yml build
-    docker-compose -f docker-compose.prod.yml up -d
+    docker compose -f docker-compose.prod.yml build
+    docker compose -f docker-compose.prod.yml up -d
 
     # Wait for services to start
     print_message $YELLOW "Waiting for services to start..."
     sleep 10
 
     # Check if services are running
-    if docker-compose -f docker-compose.prod.yml ps | grep -q "Up"; then
+    if docker compose -f docker-compose.prod.yml ps | grep -q "Up"; then
         print_message $GREEN "Application started successfully"
     else
         print_message $RED "Some services failed to start. Check logs with:"
-        print_message $YELLOW "cd $INSTALL_DIR && docker-compose -f docker-compose.prod.yml logs"
+        print_message $YELLOW "cd $INSTALL_DIR && docker compose -f docker-compose.prod.yml logs"
         exit 1
     fi
 }
@@ -707,7 +707,7 @@ run_migrations() {
 
     # Run migrations if they exist
     if [[ -f "backend/migrations/add_printer_stations.py" ]]; then
-        docker-compose -f docker-compose.prod.yml exec backend python /app/migrations/add_printer_stations.py || true
+        docker compose -f docker-compose.prod.yml exec backend python /app/migrations/add_printer_stations.py || true
     fi
 
     print_message $GREEN "Database migrations completed"
@@ -731,8 +731,8 @@ display_summary() {
     echo "  Password: Saved in $INSTALL_DIR/.env"
 
     echo -e "\n${BLUE}Useful Commands:${NC}"
-    echo "  View logs: cd $INSTALL_DIR && docker-compose -f docker-compose.prod.yml logs -f"
-    echo "  Restart services: cd $INSTALL_DIR && docker-compose -f docker-compose.prod.yml restart"
+    echo "  View logs: cd $INSTALL_DIR && docker compose -f docker-compose.prod.yml logs -f"
+    echo "  Restart services: cd $INSTALL_DIR && docker compose -f docker-compose.prod.yml restart"
     echo "  Backup now: $INSTALL_DIR/scripts/backup.sh"
     echo "  Update application: $INSTALL_DIR/scripts/update.sh"
     echo "  Check health: $INSTALL_DIR/scripts/health-check.sh"
@@ -787,7 +787,7 @@ main() {
 
     # Restart with SSL
     cd "$INSTALL_DIR"
-    docker-compose -f docker-compose.prod.yml restart nginx
+    docker compose -f docker-compose.prod.yml restart nginx
 
     setup_systemd_services
 
