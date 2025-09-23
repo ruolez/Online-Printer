@@ -122,20 +122,33 @@ backup_existing_installation() {
 remove_existing_installation() {
     print_message $YELLOW "Removing existing installation..."
 
+    # Get the current script directory to avoid deleting it
+    local CURRENT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" 2>/dev/null && pwd )"
+
     # Stop and remove Docker containers
     if [[ -f "$INSTALL_DIR/docker-compose.prod.yml" ]]; then
         cd "$INSTALL_DIR"
         docker compose -f docker-compose.prod.yml down -v || true
+        cd /tmp  # Move to safe directory
     fi
 
-    # Remove installation directory
-    rm -rf "$INSTALL_DIR"
+    # Only remove installation directory if it's not the current source directory
+    if [[ "$INSTALL_DIR" != "$CURRENT_DIR" ]]; then
+        rm -rf "$INSTALL_DIR"
+        print_message $GREEN "Existing installation removed"
+    else
+        print_message $YELLOW "Keeping source directory at $INSTALL_DIR"
+        # Just clean up Docker volumes and generated files
+        rm -f "$INSTALL_DIR/.env"
+        rm -rf "$INSTALL_DIR/backend/__pycache__"
+        rm -rf "$INSTALL_DIR/frontend/node_modules"
+        rm -rf "$INSTALL_DIR/frontend/dist"
+        print_message $GREEN "Cleaned up installation files while preserving source"
+    fi
 
     # Remove systemd services
     systemctl disable printer-backup.timer 2>/dev/null || true
     rm -f "$SYSTEMD_DIR/printer-backup.service" "$SYSTEMD_DIR/printer-backup.timer"
-
-    print_message $GREEN "Existing installation removed"
 }
 
 # Function to update existing installation
