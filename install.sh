@@ -177,7 +177,8 @@ install_dependencies() {
         ufw \
         fail2ban \
         unzip \
-        jq
+        jq \
+        rsync
 
     print_message $GREEN "System dependencies installed"
 }
@@ -323,42 +324,25 @@ generate_passwords() {
     print_message $GREEN "Secure passwords generated"
 }
 
-# Function to clone repository
-clone_repository() {
+# Function to setup repository
+setup_repository() {
     print_message $BLUE "\nSetting up application files..."
 
-    # Ensure parent directory exists and we're in a valid directory
-    mkdir -p "$(dirname "$INSTALL_DIR")"
-    cd /tmp
+    # Get the directory where the script is being run from
+    SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 
-    # Clone from current directory to production location
-    if [[ -d "/Users/ruolez/Desktop/Dev/printer.online" ]]; then
-        # We're running from the development directory
-        cp -r /Users/ruolez/Desktop/Dev/printer.online "$INSTALL_DIR"
+    # If we're already in the install directory, use it directly
+    if [[ "$SCRIPT_DIR" == "$INSTALL_DIR" ]]; then
+        print_message $YELLOW "Using current directory as installation source"
     else
-        # Prompt for repository URL or upload
-        print_message $YELLOW "Please choose how to get the application files:"
-        echo "1) Clone from Git repository"
-        echo "2) Upload files manually"
-        read -p "Enter your choice (1-2): " choice
+        # Copy files from current directory to installation directory
+        print_message $YELLOW "Copying files from $SCRIPT_DIR to $INSTALL_DIR..."
 
-        case $choice in
-            1)
-                read -p "Enter Git repository URL: " REPO_URL
-                # Remove existing directory if it exists (empty from previous attempt)
-                rm -rf "$INSTALL_DIR"
-                git clone "$REPO_URL" "$INSTALL_DIR"
-                ;;
-            2)
-                mkdir -p "$INSTALL_DIR"
-                print_message $YELLOW "Please upload your application files to $INSTALL_DIR"
-                read -p "Press Enter when files are uploaded..."
-                ;;
-            *)
-                print_message $RED "Invalid choice"
-                exit 1
-                ;;
-        esac
+        # Create installation directory if it doesn't exist
+        mkdir -p "$INSTALL_DIR"
+
+        # Copy all files except .git directory
+        rsync -av --exclude='.git' --exclude='node_modules' "$SCRIPT_DIR/" "$INSTALL_DIR/"
     fi
 
     # Set permissions
@@ -491,27 +475,40 @@ obtain_ssl_certificate() {
     # Update nginx config with actual domain
     sed -i "s/DOMAIN_NAME/$DOMAIN_NAME/g" nginx/nginx.prod.conf
 
-    # Start nginx temporarily for certificate generation
+    # Ensure nginx is running
     docker compose -f docker-compose.prod.yml up -d nginx
 
     # Wait for nginx to start
+    print_message $YELLOW "Waiting for nginx to start..."
     sleep 5
 
-    # Obtain certificate
-    docker compose -f docker-compose.prod.yml run --rm certbot certonly \
-        --webroot \
-        --webroot-path=/var/www/certbot \
-        --email "$EMAIL_ADDRESS" \
-        --agree-tos \
-        --no-eff-email \
-        --force-renewal \
-        -d "$DOMAIN_NAME"
+    # Check if certificate already exists
+    if docker compose -f docker-compose.prod.yml exec nginx test -f /etc/letsencrypt/live/$DOMAIN_NAME/fullchain.pem 2>/dev/null; then
+        print_message $YELLOW "Certificate already exists for $DOMAIN_NAME, attempting renewal..."
+        docker compose -f docker-compose.prod.yml run --rm certbot renew
+    else
+        print_message $YELLOW "Obtaining new certificate for $DOMAIN_NAME..."
+        # Obtain new certificate
+        docker compose -f docker-compose.prod.yml run --rm certbot certonly \
+            --webroot \
+            --webroot-path=/var/www/certbot \
+            --email "$EMAIL_ADDRESS" \
+            --agree-tos \
+            --no-eff-email \
+            -d "$DOMAIN_NAME"
+    fi
 
     if [[ $? -eq 0 ]]; then
-        print_message $GREEN "SSL certificate obtained successfully"
+        print_message $GREEN "SSL certificate ready for $DOMAIN_NAME"
+
+        # Restart nginx with SSL configuration
+        docker compose -f docker-compose.prod.yml restart nginx
     else
         print_message $RED "Failed to obtain SSL certificate"
-        print_message $YELLOW "You can retry later with: cd $INSTALL_DIR && ./scripts/renew-ssl.sh"
+        print_message $YELLOW "The application will work on HTTP. To enable HTTPS:"
+        print_message $YELLOW "1. Ensure DNS is properly configured"
+        print_message $YELLOW "2. Run: cd $INSTALL_DIR && docker compose -f docker-compose.prod.yml run --rm certbot certonly --webroot --webroot-path=/var/www/certbot --email $EMAIL_ADDRESS --agree-tos --no-eff-email -d $DOMAIN_NAME"
+        print_message $YELLOW "3. Restart nginx: docker compose -f docker-compose.prod.yml restart nginx"
     fi
 }
 
@@ -702,21 +699,37 @@ start_application() {
     fi
 }
 
-# Function to run database migrations
-run_migrations() {
-    print_message $BLUE "\nRunning database migrations..."
+# Function to initialize database
+initialize_database() {
+    print_message $BLUE "\nInitializing database..."
 
     cd "$INSTALL_DIR"
 
     # Wait for database to be ready
-    sleep 5
+    print_message $YELLOW "Waiting for database to be ready..."
+    for i in {1..30}; do
+        if docker compose -f docker-compose.prod.yml exec postgres pg_isready -U "$DB_USER" -d "$DB_NAME" &>/dev/null; then
+            print_message $GREEN "Database is ready!"
+            break
+        fi
+        if [[ $i -eq 30 ]]; then
+            print_message $RED "Database failed to become ready"
+            exit 1
+        fi
+        sleep 2
+    done
 
-    # Run migrations if they exist
+    # Create database tables
+    print_message $YELLOW "Creating database tables..."
+    docker compose -f docker-compose.prod.yml exec -T backend python -c "from app import app, db; with app.app_context(): db.create_all(); print('✓ Database tables created successfully')"
+
+    # Run migrations
     if [[ -f "backend/migrations/add_printer_stations.py" ]]; then
-        docker compose -f docker-compose.prod.yml exec backend python /app/migrations/add_printer_stations.py || true
+        print_message $YELLOW "Running database migrations..."
+        docker compose -f docker-compose.prod.yml exec -T backend python /app/migrations/add_printer_stations.py || print_message $YELLOW "Migration may have already been applied"
     fi
 
-    print_message $GREEN "Database migrations completed"
+    print_message $GREEN "Database initialization completed"
 }
 
 # Function to display installation summary
@@ -777,23 +790,19 @@ main() {
     configure_fail2ban
 
     # Create directories
-    mkdir -p "$INSTALL_DIR" "$BACKUP_DIR" "$LOG_DIR"
+    mkdir -p "$BACKUP_DIR" "$LOG_DIR"
 
-    clone_repository
+    setup_repository
     create_env_file
     create_production_dockerfiles
     create_maintenance_scripts
 
     # Build and start basic services first
     start_application
-    run_migrations
+    initialize_database
 
     # Obtain SSL certificate
     obtain_ssl_certificate
-
-    # Restart with SSL
-    cd "$INSTALL_DIR"
-    docker compose -f docker-compose.prod.yml restart nginx
 
     setup_systemd_services
 
