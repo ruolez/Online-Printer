@@ -344,28 +344,43 @@ generate_passwords() {
 setup_repository() {
     print_message $BLUE "\nSetting up application files..."
 
-    # Ensure we're in a valid directory first
-    cd /tmp
+    # Save the original working directory before changing
+    local ORIGINAL_DIR="$(pwd 2>/dev/null)"
 
     # Get the directory where the script is being run from
-    # Handle case where current directory might not exist
+    # First try to get it from the script location
     if [[ -f "${BASH_SOURCE[0]}" ]]; then
         SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" 2>/dev/null && pwd )"
     fi
 
-    # If script dir couldn't be determined or doesn't exist, check common locations
-    if [[ -z "$SCRIPT_DIR" ]] || [[ ! -d "$SCRIPT_DIR" ]]; then
-        if [[ -d "/opt/Online-Printer" ]]; then
-            SCRIPT_DIR="/opt/Online-Printer"
-        elif [[ -d "/root/Online-Printer" ]]; then
-            SCRIPT_DIR="/root/Online-Printer"
-        elif [[ -d "/home/ubuntu/Online-Printer" ]]; then
-            SCRIPT_DIR="/home/ubuntu/Online-Printer"
-        else
+    # If that fails, check if we have install.sh in the current/original directory
+    if [[ -z "$SCRIPT_DIR" ]] || [[ ! -f "$SCRIPT_DIR/install.sh" ]]; then
+        if [[ -n "$ORIGINAL_DIR" ]] && [[ -f "$ORIGINAL_DIR/install.sh" ]]; then
+            SCRIPT_DIR="$ORIGINAL_DIR"
+        fi
+    fi
+
+    # Ensure we're in a valid directory for operations
+    cd /tmp
+
+    # If script dir still couldn't be determined, check common locations
+    if [[ -z "$SCRIPT_DIR" ]] || [[ ! -f "$SCRIPT_DIR/install.sh" ]]; then
+        # Check various possible locations
+        for dir in "/opt/Online-Printer" "/opt/printer.online" "/root/Online-Printer" "/home/ubuntu/Online-Printer" "/home/online-printer" "$ORIGINAL_DIR"; do
+            if [[ -d "$dir" ]] && [[ -f "$dir/install.sh" ]]; then
+                SCRIPT_DIR="$dir"
+                print_message $YELLOW "Found application files at: $SCRIPT_DIR"
+                break
+            fi
+        done
+
+        # If still not found, fail
+        if [[ -z "$SCRIPT_DIR" ]] || [[ ! -f "$SCRIPT_DIR/install.sh" ]]; then
             print_message $RED "Cannot find application files. Please ensure you're running from the cloned repository."
+            print_message $YELLOW "Current directory: $ORIGINAL_DIR"
+            print_message $YELLOW "Script location: ${BASH_SOURCE[0]}"
             exit 1
         fi
-        print_message $YELLOW "Found application files at: $SCRIPT_DIR"
     fi
 
     # If we're already in the install directory or they're the same, just use it
