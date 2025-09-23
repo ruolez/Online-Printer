@@ -545,21 +545,18 @@ obtain_ssl_certificate() {
     print_message $YELLOW "Waiting for nginx to start..."
     sleep 5
 
-    # Check if certificate already exists
-    if docker compose -f docker-compose.prod.yml exec nginx test -f /etc/letsencrypt/live/$DOMAIN_NAME/fullchain.pem 2>/dev/null; then
-        print_message $YELLOW "Certificate already exists for $DOMAIN_NAME, attempting renewal..."
-        docker compose -f docker-compose.prod.yml run --rm certbot renew
-    else
-        print_message $YELLOW "Obtaining new certificate for $DOMAIN_NAME..."
-        # Obtain new certificate
-        docker compose -f docker-compose.prod.yml run --rm certbot certonly \
-            --webroot \
-            --webroot-path=/var/www/certbot \
-            --email "$EMAIL_ADDRESS" \
-            --agree-tos \
-            --no-eff-email \
-            -d "$DOMAIN_NAME"
-    fi
+    # Always try to obtain certificate (certbot will handle if it exists)
+    print_message $YELLOW "Obtaining certificate for $DOMAIN_NAME..."
+
+    # Obtain certificate (certbot will skip if valid cert exists)
+    docker compose -f docker-compose.prod.yml run --rm certbot certonly \
+        --webroot \
+        --webroot-path=/var/www/certbot \
+        --email "$EMAIL_ADDRESS" \
+        --agree-tos \
+        --no-eff-email \
+        --keep-until-expiring \
+        -d "$DOMAIN_NAME"
 
     if [[ $? -eq 0 ]]; then
         print_message $GREEN "SSL certificate ready for $DOMAIN_NAME"
