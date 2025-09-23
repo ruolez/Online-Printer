@@ -548,8 +548,8 @@ obtain_ssl_certificate() {
     # Always try to obtain certificate (certbot will handle if it exists)
     print_message $YELLOW "Obtaining certificate for $DOMAIN_NAME..."
 
-    # Obtain certificate (certbot will skip if valid cert exists)
-    docker compose -f docker-compose.prod.yml run --rm certbot certonly \
+    # Run certbot with explicit entrypoint override to obtain certificate
+    docker compose -f docker-compose.prod.yml run --rm --entrypoint="" certbot certbot certonly \
         --webroot \
         --webroot-path=/var/www/certbot \
         --email "$EMAIL_ADDRESS" \
@@ -582,7 +582,7 @@ create_maintenance_scripts() {
     cat > "$INSTALL_DIR/scripts/renew-ssl.sh" << 'EOF'
 #!/bin/bash
 cd /opt/printer.online
-docker compose -f docker-compose.prod.yml run --rm certbot renew
+docker compose -f docker-compose.prod.yml run --rm --entrypoint="" certbot certbot renew
 docker compose -f docker-compose.prod.yml exec nginx nginx -s reload
 EOF
 
