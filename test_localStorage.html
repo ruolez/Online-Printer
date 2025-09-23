@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LocalStorage Test for Printer.Online</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 50px auto;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        .container {
+            background: white;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #333;
+            border-bottom: 2px solid #4CAF50;
+            padding-bottom: 10px;
+        }
+        .storage-item {
+            margin: 10px 0;
+            padding: 10px;
+            background: #f9f9f9;
+            border-left: 3px solid #4CAF50;
+        }
+        .key {
+            font-weight: bold;
+            color: #2196F3;
+        }
+        .value {
+            color: #666;
+            font-family: monospace;
+        }
+        button {
+            margin: 5px;
+            padding: 10px 20px;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+        }
+        .btn-set { background: #4CAF50; color: white; }
+        .btn-get { background: #2196F3; color: white; }
+        .btn-clear { background: #f44336; color: white; }
+        .test-section {
+            margin: 20px 0;
+            padding: 15px;
+            border: 1px dashed #ccc;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🖨️ Printer.Online - LocalStorage Test</h1>
+
+        <div class="test-section">
+            <h2>Test LocalStorage Settings</h2>
+            <p>These buttons simulate the localStorage operations that the app performs:</p>
+
+            <h3>Device Mode</h3>
+            <button class="btn-set" onclick="setDeviceMode('sender')">Set Mode: Sender</button>
+            <button class="btn-set" onclick="setDeviceMode('printer')">Set Mode: Printer</button>
+            <button class="btn-set" onclick="setDeviceMode('hybrid')">Set Mode: Hybrid</button>
+            <button class="btn-get" onclick="getDeviceMode()">Get Current Mode</button>
+
+            <h3>Default Printer Station</h3>
+            <button class="btn-set" onclick="setDefaultStation(1)">Set Station ID: 1</button>
+            <button class="btn-set" onclick="setDefaultStation(2)">Set Station ID: 2</button>
+            <button class="btn-set" onclick="setDefaultStation(null)">Clear Station</button>
+            <button class="btn-get" onclick="getDefaultStation()">Get Current Station</button>
+
+            <h3>Auto-Print Settings</h3>
+            <button class="btn-set" onclick="setAutoPrint(true)">Enable Auto-Print</button>
+            <button class="btn-set" onclick="setAutoPrint(false)">Disable Auto-Print</button>
+            <button class="btn-get" onclick="getAutoPrint()">Get Auto-Print Status</button>
+
+            <h3>Management</h3>
+            <button class="btn-get" onclick="showAllStorage()">Show All Storage</button>
+            <button class="btn-clear" onclick="clearAll()">Clear All Settings</button>
+        </div>
+
+        <div class="test-section">
+            <h2>Current LocalStorage Contents</h2>
+            <div id="storage-contents"></div>
+        </div>
+
+        <div class="test-section">
+            <h2>Console Output</h2>
+            <div id="console-output" style="background: #000; color: #0f0; padding: 10px; font-family: monospace; min-height: 100px; max-height: 300px; overflow-y: auto;"></div>
+        </div>
+    </div>
+
+    <script>
+        // Helper function to log to both console and page
+        function log(message, data = null) {
+            const output = document.getElementById('console-output');
+            const timestamp = new Date().toLocaleTimeString();
+            let logMessage = `[${timestamp}] ${message}`;
+            if (data !== null) {
+                logMessage += `: ${JSON.stringify(data)}`;
+            }
+            output.innerHTML += logMessage + '<br>';
+            output.scrollTop = output.scrollHeight;
+            console.log(message, data);
+
+            // Update storage display
+            showAllStorage();
+        }
+
+        // Device Mode Functions
+        function setDeviceMode(mode) {
+            localStorage.setItem('deviceMode', mode);
+            log(`Device mode set to '${mode}'`);
+        }
+
+        function getDeviceMode() {
+            const mode = localStorage.getItem('deviceMode');
+            log('Current device mode', mode || 'not set');
+            return mode;
+        }
+
+        // Default Station Functions
+        function setDefaultStation(stationId) {
+            if (stationId === null) {
+                localStorage.removeItem('defaultPrinterStation');
+                log('Default printer station cleared');
+            } else {
+                localStorage.setItem('defaultPrinterStation', stationId);
+                log(`Default printer station set to ID: ${stationId}`);
+            }
+        }
+
+        function getDefaultStation() {
+            const station = localStorage.getItem('defaultPrinterStation');
+            log('Current default station', station || 'not set');
+            return station;
+        }
+
+        // Auto-Print Functions
+        function setAutoPrint(enabled) {
+            localStorage.setItem('autoAddToPrintQueue', enabled);
+            log(`Auto-print ${enabled ? 'enabled' : 'disabled'}`);
+        }
+
+        function getAutoPrint() {
+            const autoPrint = localStorage.getItem('autoAddToPrintQueue');
+            log('Auto-print status', autoPrint !== 'false' ? 'enabled' : 'disabled');
+            return autoPrint;
+        }
+
+        // Show all localStorage
+        function showAllStorage() {
+            const container = document.getElementById('storage-contents');
+            container.innerHTML = '';
+
+            const keys = [
+                'deviceMode',
+                'defaultPrinterStation',
+                'autoAddToPrintQueue',
+                'printerStation',
+                'stationSessionToken',
+                'authToken',
+                'isPWA',
+                'displayMode'
+            ];
+
+            keys.forEach(key => {
+                const value = localStorage.getItem(key);
+                if (value !== null) {
+                    const item = document.createElement('div');
+                    item.className = 'storage-item';
+                    item.innerHTML = `
+                        <span class="key">${key}:</span>
+                        <span class="value">${value}</span>
+                    `;
+                    container.appendChild(item);
+                }
+            });
+
+            if (container.innerHTML === '') {
+                container.innerHTML = '<p style="color: #999;">No settings stored in localStorage</p>';
+            }
+        }
+
+        // Clear all settings
+        function clearAll() {
+            const keys = [
+                'deviceMode',
+                'defaultPrinterStation',
+                'autoAddToPrintQueue',
+                'printerStation',
+                'stationSessionToken'
+            ];
+
+            keys.forEach(key => localStorage.removeItem(key));
+            log('All printer settings cleared from localStorage');
+        }
+
+        // Initialize on load
+        window.onload = function() {
+            log('LocalStorage test page loaded');
+            showAllStorage();
+
+            // Set some default values if nothing is set
+            if (!localStorage.getItem('deviceMode')) {
+                log('No device mode found, setting default to hybrid');
+                setDeviceMode('hybrid');
+            }
+        };
+    </script>
+</body>
+</html>

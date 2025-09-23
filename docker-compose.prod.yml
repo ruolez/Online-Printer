@@ -1,0 +1,116 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: printer_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${DB_NAME}
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./database/init.sql:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      - printer_network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER} -d ${DB_NAME}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.prod
+    container_name: printer_backend
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql://${DB_USER}:${DB_PASSWORD}@postgres:5432/${DB_NAME}
+      FLASK_ENV: production
+      SECRET_KEY: ${JWT_SECRET_KEY}
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/0
+      DOMAIN_NAME: ${DOMAIN_NAME}
+    volumes:
+      - uploads:/app/uploads
+      - ./backend/migrations:/app/migrations:ro
+    networks:
+      - printer_network
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: gunicorn --bind 0.0.0.0:5000 --workers 4 --threads 2 app:app
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.prod
+      args:
+        VITE_API_URL: https://${DOMAIN_NAME}/api
+    container_name: printer_frontend
+    restart: unless-stopped
+    volumes:
+      - frontend_dist:/app/dist
+    networks:
+      - printer_network
+
+  redis:
+    image: redis:7-alpine
+    container_name: printer_redis
+    restart: unless-stopped
+    volumes:
+      - redis_data:/data
+    networks:
+      - printer_network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    command: redis-server --appendonly yes
+
+  nginx:
+    image: nginx:alpine
+    container_name: printer_nginx
+    restart: unless-stopped
+    volumes:
+      - frontend_dist:/usr/share/nginx/html:ro
+      - ./nginx/nginx.prod.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./nginx/ssl:/etc/nginx/ssl:ro
+      - certbot_www:/var/www/certbot:ro
+      - certbot_conf:/etc/letsencrypt:ro
+    ports:
+      - "80:80"
+      - "443:443"
+    networks:
+      - printer_network
+    depends_on:
+      - backend
+      - frontend
+
+  certbot:
+    image: certbot/certbot
+    container_name: printer_certbot
+    volumes:
+      - certbot_www:/var/www/certbot
+      - certbot_conf:/etc/letsencrypt
+    entrypoint: "/bin/sh -c 'trap exit TERM; while :; do certbot renew; sleep 12h & wait $${!}; done;'"
+    networks:
+      - printer_network
+
+networks:
+  printer_network:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  redis_data:
+  uploads:
+  frontend_dist:
+  certbot_www:
+  certbot_conf:
