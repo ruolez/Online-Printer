@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from "react";
 import { ThemeProvider } from "./components/theme-provider";
 import { Button } from "./components/ui/button";
 import autoPrintManager from "./services/AutoPrintManager";
+import { isPWA } from "./utils/pwaDetection";
 import {
   Card,
   CardContent,
