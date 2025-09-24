@@ -935,6 +935,12 @@ with app.app_context():
         docker compose -f docker-compose.prod.yml exec -T backend python /app/migrations/add_printer_stations.py || print_message $YELLOW "Migration may have already been applied"
     fi
 
+    # Run device_mode removal migration (makes device mode local-only)
+    if [[ -f "backend/migrations/remove_device_mode.py" ]]; then
+        print_message $YELLOW "Removing device_mode from database (now stored locally per device)..."
+        docker compose -f docker-compose.prod.yml exec -T backend python /app/migrations/remove_device_mode.py || print_message $YELLOW "Device mode migration may have already been applied"
+    fi
+
     print_message $GREEN "Database initialization completed"
 }
 

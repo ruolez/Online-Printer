@@ -25,62 +25,22 @@ const API_URL = "/api";
 export function ModeSelection({ token, onModeSelected }) {
   const [selectedMode, setSelectedMode] = useState("");
   const [currentMode, setCurrentMode] = useState(null);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
   const [updating, setUpdating] = useState(false);
 
   useEffect(() => {
-    // Check localStorage first
-    const localMode = localStorage.getItem('deviceMode');
-    if (localMode) {
-      setCurrentMode(localMode);
-      setSelectedMode(localMode);
-    }
-    fetchCurrentMode();
+    // Device mode is now local only - get from localStorage
+    const localMode = localStorage.getItem('deviceMode') || 'hybrid';
+    setCurrentMode(localMode);
+    setSelectedMode(localMode);
   }, []);
-
-  const fetchCurrentMode = async () => {
-    try {
-      const response = await fetch(`${API_URL}/settings`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-
-      if (response.ok) {
-        const data = await response.json();
-        setCurrentMode(data.device_mode || "hybrid");
-        setSelectedMode(data.device_mode || "hybrid");
-      }
-    } catch (error) {
-      console.error("Error fetching settings:", error);
-    } finally {
-      setLoading(false);
-    }
-  };
 
   const handleModeChange = async () => {
     setUpdating(true);
     try {
-      // Save to localStorage immediately
+      // Save to localStorage only (device mode is now device-specific)
       localStorage.setItem('deviceMode', selectedMode);
-
-      const response = await fetch(`${API_URL}/settings`, {
-        method: "PUT",
-        headers: {
-          Authorization: `Bearer ${token}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          device_mode: selectedMode,
-        }),
-      });
-
-      if (response.ok) {
-        onModeSelected(selectedMode);
-      } else {
-        const error = await response.json();
-        console.error("Error updating mode:", error);
-        // Revert localStorage on failure
-        localStorage.setItem('deviceMode', currentMode);
-      }
+      onModeSelected(selectedMode);
     } catch (error) {
       console.error("Error updating mode:", error);
       // Revert localStorage on failure

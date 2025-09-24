@@ -272,10 +272,37 @@ function Dashboard({ token, username, onLogout }) {
 
   const fetchSettings = async () => {
     try {
-      // Check localStorage first for faster load
-      const localMode = localStorage.getItem('deviceMode');
-      if (localMode) {
-        setDeviceMode(localMode);
+      // Get device mode from localStorage only (it's device-specific, not user-specific)
+      const localMode = localStorage.getItem('deviceMode') || 'hybrid';
+      setDeviceMode(localMode);
+
+      if (localMode !== 'printer') {
+        // For hybrid mode, check if we have a registered station
+        let stationId = null;
+        if (localMode === 'hybrid') {
+          const savedStation = localStorage.getItem("printerStation");
+          if (savedStation) {
+            try {
+              const stationData = JSON.parse(savedStation);
+              stationId = stationData.id;
+              console.log('[App] Hybrid mode with station ID:', stationId);
+            } catch (e) {
+              console.error('Error parsing saved station:', e);
+            }
+          }
+        }
+        autoPrintManager.init(token, stationId);
+      }
+
+      const response = await fetch(`${API_URL}/settings`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        // Device mode is now local only, not stored on server
+
+        // Initialize auto-print based on local device mode
         if (localMode !== 'printer') {
           // For hybrid mode, check if we have a registered station
           let stationId = null;
@@ -293,39 +320,9 @@ function Dashboard({ token, username, onLogout }) {
           }
           autoPrintManager.init(token, stationId);
         }
-      }
 
-      const response = await fetch(`${API_URL}/settings`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-
-      if (response.ok) {
-        const data = await response.json();
-        const serverMode = data.device_mode || 'hybrid';
-        setDeviceMode(serverMode);
-
-        // Update localStorage if different from server
-        if (localMode !== serverMode) {
-          localStorage.setItem('deviceMode', serverMode);
-        }
-
-        // Only initialize auto-print for hybrid/sender modes
-        if (serverMode !== 'printer') {
-          // For hybrid mode, check if we have a registered station
-          let stationId = null;
-          if (serverMode === 'hybrid') {
-            const savedStation = localStorage.getItem("printerStation");
-            if (savedStation) {
-              try {
-                const stationData = JSON.parse(savedStation);
-                stationId = stationData.id;
-                console.log('[App] Hybrid mode with station ID:', stationId);
-              } catch (e) {
-                console.error('Error parsing saved station:', e);
-              }
-            }
-          }
-          autoPrintManager.init(token, stationId);
+        if (data.auto_print_enabled && isPWA() && localMode !== 'printer') {
+          autoPrintManager.setAutoPrint(true);
         }
       }
     } catch (err) {

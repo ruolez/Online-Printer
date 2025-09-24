@@ -104,7 +104,6 @@ class UserSettings(db.Model):
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     # Print settings
-    device_mode = db.Column(db.String(20), default='hybrid')  # sender, printer, hybrid
     default_station_id = db.Column(db.Integer, db.ForeignKey('printer_stations.id'))
 
     def to_dict(self):
@@ -114,7 +113,6 @@ class UserSettings(db.Model):
             'auto_print_enabled': self.auto_print_enabled,
             'print_orientation': self.print_orientation,
             'print_copies': self.print_copies,
-            'device_mode': self.device_mode,
             'default_station_id': self.default_station_id,
             'last_print_check': self.last_print_check.isoformat() if self.last_print_check else None,
             'updated_at': self.updated_at.isoformat() if self.updated_at else None
@@ -587,13 +585,6 @@ def update_settings(current_user):
         if not isinstance(copies, int) or copies < 1 or copies > 10:
             return jsonify({'message': 'Print copies must be between 1 and 10'}), 400
         settings.print_copies = copies
-
-    # Update device_mode
-    if 'device_mode' in data:
-        mode = data['device_mode']
-        if mode not in ['sender', 'printer', 'hybrid']:
-            return jsonify({'message': 'Device mode must be sender, printer, or hybrid'}), 400
-        settings.device_mode = mode
 
     # Update default_station_id
     if 'default_station_id' in data:

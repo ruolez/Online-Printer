@@ -27,8 +27,10 @@ import {
 const API_URL = '/api';
 
 export function SettingsNew({ token, onModeChange }) {
+  const [deviceMode, setDeviceMode] = useState(() => {
+    return localStorage.getItem('deviceMode') || 'hybrid';
+  });
   const [settings, setSettings] = useState({
-    device_mode: 'hybrid',
     default_station_id: null,
     auto_print_enabled: false,
     print_orientation: 'portrait',
@@ -44,19 +46,16 @@ export function SettingsNew({ token, onModeChange }) {
 
   const fetchSettings = async () => {
     try {
-      // Load from localStorage first for instant UI
-      const localMode = localStorage.getItem('deviceMode');
-      const localStation = localStorage.getItem('defaultPrinterStation');
-      const localAutoPrint = localStorage.getItem('autoAddToPrintQueue');
+      // Load device mode from localStorage (it's device-specific)
+      const localMode = localStorage.getItem('deviceMode') || 'hybrid';
+      setDeviceMode(localMode);
 
-      if (localMode) {
-        setSettings(prev => ({ ...prev, device_mode: localMode }));
-      }
+      const localStation = localStorage.getItem('defaultPrinterStation');
       if (localStation) {
         setSettings(prev => ({ ...prev, default_station_id: parseInt(localStation) }));
       }
 
-      // Fetch from server
+      // Fetch user settings from server (without device_mode)
       const response = await fetch(`${API_URL}/settings`, {
         headers: { Authorization: `Bearer ${token}` },
       });
@@ -64,15 +63,12 @@ export function SettingsNew({ token, onModeChange }) {
       if (response.ok) {
         const data = await response.json();
         setSettings({
-          device_mode: data.device_mode || 'hybrid',
           default_station_id: data.default_station_id,
           auto_print_enabled: data.auto_print_enabled || false,
           print_orientation: data.print_orientation || 'portrait',
           print_copies: data.print_copies || 1,
         });
 
-        // Update localStorage with server values
-        localStorage.setItem('deviceMode', data.device_mode || 'hybrid');
         if (data.default_station_id) {
           localStorage.setItem('defaultPrinterStation', data.default_station_id);
         }
@@ -89,15 +85,15 @@ export function SettingsNew({ token, onModeChange }) {
     setSuccess(false);
 
     try {
-      // Update localStorage immediately
-      localStorage.setItem('deviceMode', settings.device_mode);
+      // Save device mode to localStorage only (device-specific)
+      localStorage.setItem('deviceMode', deviceMode);
       if (settings.default_station_id) {
         localStorage.setItem('defaultPrinterStation', settings.default_station_id);
       } else {
         localStorage.removeItem('defaultPrinterStation');
       }
 
-      // Save to server
+      // Save user settings to server (without device_mode)
       const response = await fetch(`${API_URL}/settings`, {
         method: 'PUT',
         headers: {
@@ -112,7 +108,7 @@ export function SettingsNew({ token, onModeChange }) {
         setTimeout(() => setSuccess(false), 3000);
         // Notify parent component if mode changed
         if (onModeChange) {
-          onModeChange(settings.device_mode);
+          onModeChange(deviceMode);
         }
       }
     } catch (error) {
@@ -123,7 +119,7 @@ export function SettingsNew({ token, onModeChange }) {
   };
 
   const handleModeChange = (mode) => {
-    setSettings(prev => ({ ...prev, device_mode: mode }));
+    setDeviceMode(mode);
     localStorage.setItem('deviceMode', mode);
     // Notify parent component if callback provided
     if (onModeChange) {
@@ -162,7 +158,7 @@ export function SettingsNew({ token, onModeChange }) {
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
-          <RadioGroup value={settings.device_mode} onValueChange={handleModeChange}>
+          <RadioGroup value={deviceMode} onValueChange={handleModeChange}>
             <div className="flex items-center space-x-2 p-3 rounded-lg border hover:bg-accent/50">
               <RadioGroupItem value="sender" id="mode-sender" />
               <Label htmlFor="mode-sender" className="cursor-pointer flex-1">
@@ -203,7 +199,7 @@ export function SettingsNew({ token, onModeChange }) {
             </div>
           </RadioGroup>
 
-          {settings.device_mode === 'printer' && (
+          {deviceMode === 'printer' && (
             <Alert>
               <Info className="h-4 w-4" />
               <AlertDescription>
