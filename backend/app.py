@@ -750,11 +750,15 @@ def get_next_print_job(current_user):
     # Get station_id from query params if provided (for printer mode)
     station_id = request.args.get('station_id', type=int)
 
-    # Get user's print settings
+    # Get user's print settings (we need them for orientation and copies even for stations)
     settings = UserSettings.query.filter_by(user_id=current_user.id).first()
 
-    if not settings or not settings.auto_print_enabled:
-        return jsonify({'message': 'Auto-print is disabled'}), 200
+    # For stations, always allow auto-print
+    # For regular users, check the auto_print_enabled setting
+    if not station_id:
+        # Only check auto_print setting for non-station mode
+        if not settings or not settings.auto_print_enabled:
+            return jsonify({'message': 'Auto-print is disabled'}), 200
 
     # Build query
     query = PrintQueue.query.filter_by(
@@ -762,26 +766,18 @@ def get_next_print_job(current_user):
         status='pending'
     )
 
-    # Handle station filtering based on device mode
-    device_mode = settings.device_mode if settings else 'hybrid'
-
-    if device_mode == 'hybrid':
-        # In hybrid mode: get jobs with NO station_id (local) OR matching station_id
-        if station_id:
-            # Device is registered as a station in hybrid mode
-            from sqlalchemy import or_
-            query = query.filter(or_(
-                PrintQueue.station_id == station_id,
-                PrintQueue.station_id == None
-            ))
-        else:
-            # No station registered, only get local jobs
-            query = query.filter_by(station_id=None)
-    elif station_id:
-        # In printer mode: only get jobs for this specific station
-        query = query.filter_by(station_id=station_id)
+    # Handle station filtering
+    # If station_id is provided, get jobs for that station or local jobs (hybrid mode)
+    # If no station_id, only get local jobs
+    if station_id:
+        # Get jobs for this specific station OR local jobs (for hybrid mode)
+        from sqlalchemy import or_
+        query = query.filter(or_(
+            PrintQueue.station_id == station_id,
+            PrintQueue.station_id == None
+        ))
     else:
-        # Default: only get local jobs (no station_id)
+        # No station specified, only get local jobs
         query = query.filter_by(station_id=None)
 
     # Get next pending job
@@ -790,15 +786,16 @@ def get_next_print_job(current_user):
     if not next_job:
         return jsonify({'message': 'No pending print jobs'}), 200
 
-    # Update last print check time
-    settings.last_print_check = datetime.utcnow()
-    db.session.commit()
+    # Update last print check time if settings exist
+    if settings:
+        settings.last_print_check = datetime.utcnow()
+        db.session.commit()
 
     return jsonify({
         'print_job': next_job.to_dict(),
         'settings': {
-            'orientation': settings.print_orientation,
-            'copies': settings.print_copies
+            'orientation': settings.print_orientation if settings else 'portrait',
+            'copies': settings.print_copies if settings else 1
         }
     }), 200
 
