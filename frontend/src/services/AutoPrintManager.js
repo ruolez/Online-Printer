@@ -52,10 +52,12 @@ class AutoPrintManager {
       return;
     }
 
-    console.log('[AutoPrintManager] Running in PWA mode - auto-print enabled');
+    console.log(`[AutoPrintManager] Running in PWA mode - auto-print enabled for ${stationId ? `station ${stationId}` : 'user'}`);
     await this.fetchSettings();
 
-    if (this.settings?.auto_print_enabled) {
+    // For printer stations, always enable auto-print
+    // For regular users, check the auto_print_enabled setting
+    if (this.stationId || this.settings?.auto_print_enabled) {
       this.start();
     }
   }
@@ -109,8 +111,13 @@ class AutoPrintManager {
 
   async checkPendingJobs() {
     try {
-      // Check if there are any pending jobs in the print queue
-      const queueResponse = await fetch(`${API_URL}/print-queue`, {
+      // If we have a station ID, check station-specific jobs
+      let url = `${API_URL}/print-queue`;
+      if (this.stationId) {
+        url = `${API_URL}/print-queue/station/${this.stationId}`;
+      }
+
+      const queueResponse = await fetch(url, {
         headers: { Authorization: `Bearer ${this.token}` },
       });
 
@@ -119,7 +126,7 @@ class AutoPrintManager {
         const pendingJobs = queueData.print_jobs?.filter(job => job.status === 'pending') || [];
 
         if (pendingJobs.length > 0) {
-          console.log(`[AutoPrintManager] Found ${pendingJobs.length} pending print job(s)`);
+          console.log(`[AutoPrintManager] Found ${pendingJobs.length} pending print job(s) for ${this.stationId ? `station ${this.stationId}` : 'user'}`);
 
           // Only schedule if not already printing and job not already scheduled
           const firstPendingJob = pendingJobs[0];
@@ -136,7 +143,9 @@ class AutoPrintManager {
   }
 
   async checkForNewFiles() {
-    if (!this.settings?.auto_print_enabled) {
+    // For printer stations, always check for jobs
+    // For regular users, check the auto_print_enabled setting
+    if (!this.stationId && !this.settings?.auto_print_enabled) {
       this.stop();
       return;
     }
@@ -145,7 +154,13 @@ class AutoPrintManager {
       // First, check for any pending jobs in the print queue
       await this.checkPendingJobs();
 
-      // Then, fetch recent files to see if there are new ones
+      // For printer stations, we don't need to check for new files
+      // as they only receive jobs sent to them
+      if (this.stationId) {
+        return;
+      }
+
+      // Then, fetch recent files to see if there are new ones (only for non-station mode)
       const response = await fetch(`${API_URL}/files?limit=10`, {
         headers: { Authorization: `Bearer ${this.token}` },
       });

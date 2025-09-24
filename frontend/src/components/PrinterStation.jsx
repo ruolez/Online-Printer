@@ -23,6 +23,7 @@ import {
   FileText,
   Clock,
 } from "lucide-react";
+import autoPrintManager from "../services/AutoPrintManager";
 
 const API_URL = "/api";
 
@@ -50,6 +51,10 @@ export function PrinterStation({ token }) {
         setSessionToken(savedSession);
         startHeartbeat(stationData.id, savedSession);
         startPolling(stationData.id);
+
+        // Initialize AutoPrintManager for this station
+        console.log('[PrinterStation] Initializing AutoPrintManager for station:', stationData.id);
+        autoPrintManager.init(token, stationData.id);
       } catch (e) {
         console.error("Error restoring station session:", e);
       }
@@ -58,6 +63,8 @@ export function PrinterStation({ token }) {
     return () => {
       stopHeartbeat();
       stopPolling();
+      // Cleanup AutoPrintManager
+      autoPrintManager.destroy();
     };
   }, [token]);
 
@@ -141,11 +148,11 @@ export function PrinterStation({ token }) {
         const data = await response.json();
         setPrintJobs(data.print_jobs || []);
 
-        // Check for pending jobs and trigger auto-print if enabled
+        // Check for pending jobs
         const pendingJobs = data.print_jobs?.filter(job => job.status === "pending") || [];
         if (pendingJobs.length > 0) {
-          // Auto-print will be handled by AutoPrintManager
-          console.log(`${pendingJobs.length} pending print job(s) detected`);
+          console.log(`[PrinterStation] ${pendingJobs.length} pending print job(s) detected`);
+          // AutoPrintManager will handle the actual printing
         }
       }
     } catch (e) {
@@ -193,6 +200,10 @@ export function PrinterStation({ token }) {
         startHeartbeat(data.station.id, data.session_token);
         startPolling(data.station.id);
 
+        // Initialize AutoPrintManager for this station
+        console.log('[PrinterStation] Initializing AutoPrintManager for new station:', data.station.id);
+        autoPrintManager.init(token, data.station.id);
+
         setStatus("online");
       } else {
         const error = await response.json();
@@ -226,6 +237,9 @@ export function PrinterStation({ token }) {
     setPrintJobs([]);
     localStorage.removeItem("printerStation");
     localStorage.removeItem("stationSessionToken");
+
+    // Stop AutoPrintManager
+    autoPrintManager.destroy();
   };
 
   const getStatusColor = () => {
