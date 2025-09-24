@@ -215,10 +215,14 @@ function AuthPage({ onLogin }) {
 function Dashboard({ token, username, onLogout }) {
   const [profile, setProfile] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState("overview");
   // Initialize from localStorage for immediate display
   const [deviceMode, setDeviceMode] = useState(() => {
     return localStorage.getItem('deviceMode') || 'hybrid';
+  });
+  // Set initial tab based on device mode
+  const [activeTab, setActiveTab] = useState(() => {
+    const mode = localStorage.getItem('deviceMode') || 'hybrid';
+    return mode === 'sender' ? 'files' : 'overview';
   });
   const [showModeSelection, setShowModeSelection] = useState(false);
   const fileListRef = useRef(null);
@@ -275,6 +279,11 @@ function Dashboard({ token, username, onLogout }) {
       // Get device mode from localStorage only (it's device-specific, not user-specific)
       const localMode = localStorage.getItem('deviceMode') || 'hybrid';
       setDeviceMode(localMode);
+
+      // Set default tab for sender mode
+      if (localMode === 'sender' && activeTab === 'overview') {
+        setActiveTab('files');
+      }
 
       if (localMode !== 'printer') {
         // For hybrid mode, check if we have a registered station
@@ -338,6 +347,11 @@ function Dashboard({ token, username, onLogout }) {
 
     // Save to localStorage
     localStorage.setItem('deviceMode', mode);
+
+    // If sender mode, switch to files tab
+    if (mode === 'sender') {
+      setActiveTab('files');
+    }
 
     // Initialize or destroy auto-print based on mode
     if (mode === 'printer') {
@@ -585,6 +599,10 @@ function Dashboard({ token, username, onLogout }) {
           setDeviceMode(mode);
           // Also save to localStorage
           localStorage.setItem('deviceMode', mode);
+          // If sender mode, switch to files tab
+          if (mode === 'sender') {
+            setActiveTab('files');
+          }
         }} />;
 
       default:
