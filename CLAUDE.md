@@ -57,6 +57,7 @@ docker exec -it webapp_backend python
 
 # Run database migrations
 docker exec webapp_backend python /app/migrations/add_printer_stations.py
+docker exec webapp_backend python /app/migrations/remove_device_mode.py
 
 # Create database tables
 docker exec webapp_backend python -c "from app import db; db.create_all()"
@@ -115,14 +116,20 @@ webapp_nginx (8080) ──┬──> webapp_frontend (5173) [Vite + React]
 
 ## Core Application Features
 
-### Remote Printer Station System
-- **Device Modes**:
-  - **Sender**: Upload files to send to remote printer stations
+### Device Mode System (Local-Only Setting)
+- **Device Modes** (stored in localStorage, NOT database):
+  - **Sender**: Upload files to send to remote printer stations (defaults to "Files" tab)
   - **Printer Station**: Receive and print jobs from remote senders
-  - **Hybrid**: Both send and receive print jobs
+  - **Hybrid**: Both send and receive print jobs (defaults to "Overview" tab)
+- **Per-Device Independence**: Same user can have different modes on different devices
+- **Mode Persistence**: Uses localStorage key `deviceMode`, survives browser restarts
+- **No Server Sync**: Device mode is never sent to or retrieved from the backend
+
+### Remote Printer Station System
 - **Station Management**: Registration, heartbeat monitoring, online/offline status
-- **Print Job Routing**: Station-specific or local printing based on mode
+- **Print Job Routing**: Station-specific or local printing based on current device mode
 - **Session Management**: Token-based sessions for printer stations
+- **Auto-Print for Stations**: Printer stations always have auto-print enabled regardless of user settings
 
 ### Progressive Web App (PWA)
 - **Auto-print capability**: Only works in PWA mode to prevent multiple browser instances
@@ -145,8 +152,10 @@ webapp_nginx (8080) ──┬──> webapp_frontend (5173) [Vite + React]
   - Stores processed files in localStorage
   - Prevents duplicate printing with job scheduling
   - Supports station-specific routing in hybrid mode
+  - **Station Mode**: Always enabled for printer stations (bypasses user auto-print setting)
+  - **Initialization**: PrinterStation component initializes with `autoPrintManager.init(token, stationId)`
 - **Print Queue**: Database-backed queue with status tracking
-- **Print Settings**: User-configurable orientation, copies, auto-print toggle
+- **Print Settings**: User-configurable orientation, copies, auto-print toggle (except stations always auto-print)
 
 ### Authentication Flow
 1. User registers/logs in → Backend validates → Returns JWT token
@@ -179,8 +188,8 @@ webapp_nginx (8080) ──┬──> webapp_frontend (5173) [Vite + React]
 - `GET /api/files/<id>/download` - Download file
 
 ### Settings
-- `GET /api/settings` - Get user settings
-- `PUT /api/settings` - Update user settings (including device mode)
+- `GET /api/settings` - Get user settings (NO device mode included)
+- `PUT /api/settings` - Update user settings (NO device mode accepted)
 
 ### Print Queue
 - `GET /api/print-queue` - List print jobs
@@ -199,10 +208,10 @@ webapp_nginx (8080) ──┬──> webapp_frontend (5173) [Vite + React]
 
 ## Database Schema
 
-Five main tables with foreign key relationships:
+Six main tables with foreign key relationships:
 - `users` - User accounts with auth credentials
 - `uploaded_files` - PDF file metadata and status
-- `user_settings` - Per-user configuration (device mode, file size limits, print settings)
+- `user_settings` - Per-user configuration (file size limits, print settings - NO device mode)
 - `print_queue` - Print job tracking with FK to users, uploaded_files, and printer_stations
 - `printer_stations` - Remote printer stations with capabilities and status
 - `station_sessions` - Session management for printer stations
@@ -215,6 +224,21 @@ Key relationships:
 - print_queue.station_id → printer_stations.id
 - printer_stations.user_id → users.id
 - station_sessions.station_id → printer_stations.id
+
+## Recent Architecture Changes
+
+### Device Mode Migration (Local-Only)
+- **Previous**: Device mode was stored in database `user_settings.device_mode` column
+- **Current**: Device mode is stored only in localStorage, allowing per-device settings
+- **Migration**: Run `remove_device_mode.py` to drop the database column
+- **Frontend Changes**: All components now read/write directly to localStorage
+- **Backend Changes**: Removed all device_mode references from API endpoints
+
+### Auto-Print Fixes for Printer Stations
+- **Issue**: Printer stations weren't auto-printing received jobs
+- **Root Cause**: AutoPrintManager wasn't being initialized for stations
+- **Fix**: PrinterStation component now initializes AutoPrintManager with station ID
+- **Backend Fix**: `/api/print-queue/next` endpoint now bypasses auto_print check for stations
 
 ## Known Issues & Solutions
 
@@ -244,6 +268,21 @@ Celery worker not running. Files marked as 'completed' immediately on upload.
 3. Ensure Node.js 20+ in frontend Dockerfile
 4. Check Redis health: `docker exec webapp_redis redis-cli ping`
 
+### ReferenceError: isPWA is not defined
+Add missing import in App.jsx: `import { isPWA } from "./utils/pwaDetection";`
+
+### AttributeError: 'UserSettings' object has no attribute 'device_mode'
+Backend still has references to removed device_mode field. Check:
+1. UserSettings model definition
+2. Settings API endpoints
+3. Run `remove_device_mode.py` migration
+
+### Printer Station Not Auto-Printing
+1. Verify PrinterStation component initializes AutoPrintManager
+2. Check browser console for AutoPrintManager logs
+3. Ensure station is in PWA mode (auto-print only works in PWA)
+4. Verify `/api/print-queue/next?station_id=X` returns pending jobs
+
 ## Environment Variables
 
 Backend (docker-compose.yml):
@@ -271,11 +310,12 @@ Due to print-js library issues with Chrome PWA on Windows:
 ### Print Queue Foreign Keys
 When deleting files, backend first deletes related print_queue entries due to FK constraints. Handled automatically in delete endpoint.
 
-### Print Queue Routing in Hybrid Mode
-- The `/api/print-queue/next` endpoint filters jobs based on device mode:
-  - Hybrid mode with station_id: Returns jobs for that station OR local jobs (no station_id)
-  - Hybrid mode without station_id: Only returns local jobs
-  - Printer mode: Only returns jobs for the specific station
+### Print Queue Routing
+- The `/api/print-queue/next` endpoint behavior:
+  - With `station_id` parameter: Returns jobs for that specific station (printer station mode)
+  - Without `station_id`: Returns local jobs for the user
+  - **Station Auto-Print**: Always enabled when station_id is provided, bypasses user settings
+  - **User Auto-Print**: Only checks auto_print_enabled setting for non-station requests
 
 ### localStorage Keys
 - `authToken` - JWT authentication token
@@ -289,4 +329,8 @@ When deleting files, backend first deletes related print_queue entries due to FK
 - `pwa-prompt-dismissed` - PWA install prompt dismissal timestamp
 
 ### AutoPrintManager Station Support
-When in hybrid mode, the AutoPrintManager is initialized with the station ID from localStorage. This allows it to poll for both local jobs and station-specific jobs using the `/api/print-queue/next?station_id=X` endpoint.
+- **Station Initialization**: PrinterStation component calls `autoPrintManager.init(token, stationId)`
+- **Station Polling**: Uses `/api/print-queue/station/<station_id>` to check for pending jobs
+- **Auto-Print Override**: Stations always auto-print regardless of user's auto_print_enabled setting
+- **Dual Mode Support**: In hybrid mode, polls for both station-specific and local jobs
+- **Print Execution**: Uses `/api/print-queue/next?station_id=X` to fetch next job for printing

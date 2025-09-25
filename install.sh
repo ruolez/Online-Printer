@@ -526,7 +526,74 @@ VOLUME ["/app/dist"]
 CMD ["sh", "-c", "while true; do sleep 3600; done"]
 EOF
 
-    print_message $GREEN "Production Dockerfiles created"
+    # Admin Backend Dockerfile
+    cat > "$INSTALL_DIR/admin/backend/Dockerfile.prod" << 'EOF'
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    gcc \
+    postgresql-client \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy requirements
+COPY requirements.txt .
+
+# Install Python dependencies
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy application code
+COPY . .
+
+# Create non-root user
+RUN useradd -m -u 1000 appuser && chown -R appuser:appuser /app
+USER appuser
+
+EXPOSE 8000
+
+CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "4"]
+EOF
+
+    # Admin Frontend Dockerfile
+    cat > "$INSTALL_DIR/admin/frontend/Dockerfile.prod" << 'EOF'
+FROM node:20-alpine AS builder
+
+WORKDIR /app
+
+# Copy package files
+COPY package*.json ./
+
+# Install dependencies
+RUN npm ci
+
+# Copy source code
+COPY . .
+
+# Set production API URL
+ARG VITE_API_URL=/admin/api
+ENV VITE_API_URL=${VITE_API_URL}
+
+# Build application
+RUN npm run build
+
+# Production stage
+FROM node:20-alpine
+
+WORKDIR /app
+
+# Copy built files
+COPY --from=builder /app/dist ./dist
+
+# Create volume mount point
+VOLUME ["/app/dist"]
+
+# Simple script to keep container running
+CMD ["sh", "-c", "while true; do sleep 3600; done"]
+EOF
+
+    print_message $GREEN "Production Dockerfiles created (including admin)"
 }
 
 # Function to obtain SSL certificate
@@ -572,6 +639,10 @@ upstream backend {
     server backend:5000;
 }
 
+upstream admin_backend {
+    server admin_backend:8000;
+}
+
 # HTTP server - redirect to HTTPS
 server {
     listen 80;
@@ -613,6 +684,39 @@ server {
 
     client_max_body_size 100M;
 
+    # Admin API proxy
+    location /admin/api {
+        proxy_pass http://admin_backend/;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_buffering off;
+        rewrite ^/admin/api/(.*)$ /\$1 break;
+    }
+
+    # Admin WebSocket
+    location /admin/ws {
+        proxy_pass http://admin_backend/ws;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+    }
+
+    # Admin frontend
+    location /admin {
+        alias /usr/share/nginx/admin;
+        try_files \$uri \$uri/ /admin/index.html;
+    }
+
+    # Main app API proxy
     location /api {
         proxy_pass http://backend;
         proxy_set_header Host \$host;
@@ -627,6 +731,12 @@ server {
 
     location /health {
         proxy_pass http://backend/health;
+        access_log off;
+    }
+
+    # Admin health check
+    location /admin/health {
+        proxy_pass http://admin_backend/health;
         access_log off;
     }
 
@@ -941,6 +1051,18 @@ with app.app_context():
         docker compose -f docker-compose.prod.yml exec -T backend python /app/migrations/remove_device_mode.py || print_message $YELLOW "Device mode migration may have already been applied"
     fi
 
+    # Create default admin user for admin dashboard
+    print_message $YELLOW "Creating admin user for dashboard..."
+    docker compose -f docker-compose.prod.yml exec -T postgres psql -U "$DB_USER" -d "$DB_NAME" << EOF
+INSERT INTO users (username, password_hash, is_admin, is_active, created_at)
+VALUES ('admin', '\$2b\$12\$kP5vy623kLEAI04SC26UMefzX//TgQ3snia/zIorU/erK2WwQM30y', true, true, NOW())
+ON CONFLICT (username) DO UPDATE
+SET password_hash = '\$2b\$12\$kP5vy623kLEAI04SC26UMefzX//TgQ3snia/zIorU/erK2WwQM30y',
+    is_admin = true,
+    is_active = true;
+EOF
+    print_message $GREEN "Admin user created (username: admin, password: admin123)"
+
     print_message $GREEN "Database initialization completed"
 }
 
@@ -951,10 +1073,16 @@ display_summary() {
     print_message $GREEN "========================================="
 
     echo -e "\n${BLUE}Application Details:${NC}"
-    echo "  URL: https://$DOMAIN_NAME"
+    echo "  Main Application: https://$DOMAIN_NAME"
+    echo "  Admin Dashboard: https://$DOMAIN_NAME/admin"
     echo "  Installation Directory: $INSTALL_DIR"
     echo "  Backup Directory: $BACKUP_DIR"
     echo "  Log Directory: $LOG_DIR"
+
+    echo -e "\n${BLUE}Admin Dashboard Credentials:${NC}"
+    echo "  Username: admin"
+    echo "  Password: admin123"
+    echo "  ${YELLOW}IMPORTANT: Change the admin password after first login!${NC}"
 
     echo -e "\n${BLUE}Database Credentials:${NC}"
     echo "  Database: $DB_NAME"
