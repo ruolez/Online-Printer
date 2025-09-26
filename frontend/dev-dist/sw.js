@@ -67,7 +67,7 @@ if (!self.define) {
     });
   };
 }
-define(['./workbox-a959eb95'], (function (workbox) { 'use strict';
+define(['./workbox-4df1d317'], (function (workbox) { 'use strict';
 
   self.skipWaiting();
   workbox.clientsClaim();
@@ -82,17 +82,67 @@ define(['./workbox-a959eb95'], (function (workbox) { 'use strict';
     "revision": "3ca0b8505b4bec776b69afdba2768812"
   }, {
     "url": "index.html",
-    "revision": "0.r5c8auioadg"
+    "revision": "0.tl6rvepp9m"
   }], {});
   workbox.cleanupOutdatedCaches();
   workbox.registerRoute(new workbox.NavigationRoute(workbox.createHandlerBoundToURL("index.html"), {
     allowlist: [/^\/$/]
   }));
-  workbox.registerRoute(/^\/api\//, new workbox.NetworkFirst({
-    "cacheName": "api-cache",
+  workbox.registerRoute(/^\/api\/health/, new workbox.NetworkFirst({
+    "cacheName": "health-cache",
+    "networkTimeoutSeconds": 3,
+    plugins: [new workbox.ExpirationPlugin({
+      maxEntries: 1,
+      maxAgeSeconds: 60
+    }), new workbox.CacheableResponsePlugin({
+      statuses: [0, 200]
+    })]
+  }), 'GET');
+  workbox.registerRoute(/^\/api\/stations.*\/heartbeat/, new workbox.NetworkOnly({
+    plugins: [new workbox.BackgroundSyncPlugin("heartbeat-queue", {
+      maxRetentionTime: 1440
+    }), {
+      handlerDidError: async () => {
+        return new Response(JSON.stringify({
+          status: "queued",
+          message: "Heartbeat queued for sync"
+        }), {
+          headers: {
+            "Content-Type": "application/json"
+          }
+        });
+      }
+    }]
+  }), 'PUT');
+  workbox.registerRoute(/^\/api\/print-queue/, new workbox.NetworkFirst({
+    "cacheName": "print-queue-cache",
+    "networkTimeoutSeconds": 5,
     plugins: [new workbox.ExpirationPlugin({
       maxEntries: 10,
       maxAgeSeconds: 300
+    }), new workbox.CacheableResponsePlugin({
+      statuses: [0, 200]
+    }), {
+      handlerDidError: async () => {
+        const cache = await caches.open("print-queue-cache");
+        const cachedResponse = await cache.match("/api/print-queue");
+        return cachedResponse || new Response(JSON.stringify({
+          print_jobs: [],
+          message: "Offline - showing cached data"
+        }), {
+          headers: {
+            "Content-Type": "application/json"
+          }
+        });
+      }
+    }]
+  }), 'GET');
+  workbox.registerRoute(/^\/api\//, new workbox.NetworkFirst({
+    "cacheName": "api-cache",
+    "networkTimeoutSeconds": 10,
+    plugins: [new workbox.ExpirationPlugin({
+      maxEntries: 50,
+      maxAgeSeconds: 600
     }), new workbox.CacheableResponsePlugin({
       statuses: [0, 200]
     })]
@@ -104,7 +154,16 @@ define(['./workbox-a959eb95'], (function (workbox) { 'use strict';
       maxAgeSeconds: 604800
     }), new workbox.CacheableResponsePlugin({
       statuses: [0, 200]
-    })]
+    }), {
+      cacheWillUpdate: async ({
+        response
+      }) => {
+        if (response && response.ok) {
+          return response;
+        }
+        return null;
+      }
+    }]
   }), 'GET');
 
 }));

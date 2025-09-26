@@ -82,7 +82,7 @@ function AuthPage({ onLogin }) {
 
       if (response.ok) {
         localStorage.setItem("authToken", data.token);
-        onLogin(data.token, data.username);
+        onLogin(data.token, data.username, formData.password);
       } else {
         setError(data.message || "Authentication failed");
       }
@@ -452,7 +452,7 @@ function Dashboard({ token, username, onLogout }) {
                 </Button>
               </div>
             </div>
-            <PrinterStation token={token} />
+            <PrinterStation token={token} username={username} />
           </div>
         </div>
       </div>
@@ -690,9 +690,18 @@ function AppContent() {
     }
   };
 
-  const handleLogin = (newToken, newUsername) => {
+  const handleLogin = (newToken, newUsername, password) => {
     setToken(newToken);
     setUsername(newUsername);
+
+    // If in printer mode, save credentials for auto-reconnection
+    const deviceMode = localStorage.getItem('deviceMode');
+    if (deviceMode === 'printer') {
+      // Import authManager dynamically to avoid circular dependency
+      import('./services/AuthManager').then(({ default: authManager }) => {
+        authManager.saveStationCredentials(newUsername, password);
+      });
+    }
   };
 
   const handleLogout = () => {

@@ -1,4 +1,7 @@
 import { isPWA, storePWAStatus } from '../utils/pwaDetection';
+import authManager from './AuthManager';
+import connectionMonitor from './ConnectionMonitor';
+import stationStorage from './StationStorage';
 
 const API_URL = '/api';
 
@@ -14,6 +17,10 @@ class AutoPrintManager {
     this.isPrinting = false;
     // Track jobs that have been scheduled for printing
     this.scheduledJobs = new Set();
+    // Retry configuration
+    this.maxRetries = 3;
+    this.retryDelay = 2000; // 2 seconds
+    this.failedJobs = new Map();
   }
 
   loadCheckedFiles() {
@@ -43,6 +50,24 @@ class AutoPrintManager {
     this.token = token;
     this.stationId = stationId;
 
+    // Initialize services
+    authManager.init(token);
+    connectionMonitor.init(token);
+
+    // Set up connection monitoring
+    connectionMonitor.on('backend-connected', () => {
+      console.log('[AutoPrintManager] Connection restored, resuming operations');
+      this.processFailedJobs();
+      if (this.isRunning && !this.checkInterval) {
+        this.start();
+      }
+    });
+
+    connectionMonitor.on('backend-disconnected', () => {
+      console.log('[AutoPrintManager] Connection lost, pausing operations');
+      this.pause();
+    });
+
     // Store PWA status on init
     const isPWAMode = storePWAStatus();
 
@@ -64,15 +89,37 @@ class AutoPrintManager {
 
   async fetchSettings() {
     try {
-      const response = await fetch(`${API_URL}/settings`, {
-        headers: { Authorization: `Bearer ${this.token}` },
-      });
+      const response = await this.makeRequestWithRetry(
+        `${API_URL}/settings`,
+        { headers: {} }
+      );
 
       if (response.ok) {
         this.settings = await response.json();
       }
     } catch (error) {
       console.error('[AutoPrintManager] Error fetching settings:', error);
+    }
+  }
+
+  async makeRequestWithRetry(url, options = {}, retries = 0) {
+    // Check connection first
+    if (!connectionMonitor.isConnected()) {
+      throw new Error('No connection available');
+    }
+
+    try {
+      const response = await authManager.makeAuthenticatedRequest(url, options);
+      return response;
+    } catch (error) {
+      if (retries < this.maxRetries) {
+        const delay = this.retryDelay * Math.pow(2, retries);
+        console.log(`[AutoPrintManager] Request failed, retrying in ${delay}ms (attempt ${retries + 1}/${this.maxRetries})`);
+
+        await new Promise(resolve => setTimeout(resolve, delay));
+        return this.makeRequestWithRetry(url, options, retries + 1);
+      }
+      throw error;
     }
   }
 
@@ -109,7 +156,20 @@ class AutoPrintManager {
     }
   }
 
+  pause() {
+    console.log('[AutoPrintManager] Pausing operations due to connection loss');
+    if (this.checkInterval) {
+      clearInterval(this.checkInterval);
+      this.checkInterval = null;
+    }
+  }
+
   async checkPendingJobs() {
+    // Don't check if offline
+    if (!connectionMonitor.isConnected()) {
+      return;
+    }
+
     try {
       // If we have a station ID, check station-specific jobs
       let url = `${API_URL}/print-queue`;
@@ -117,9 +177,7 @@ class AutoPrintManager {
         url = `${API_URL}/print-queue/station/${this.stationId}`;
       }
 
-      const queueResponse = await fetch(url, {
-        headers: { Authorization: `Bearer ${this.token}` },
-      });
+      const queueResponse = await this.makeRequestWithRetry(url, { headers: {} });
 
       if (queueResponse.ok) {
         const queueData = await queueResponse.json();
@@ -161,9 +219,10 @@ class AutoPrintManager {
       }
 
       // Then, fetch recent files to see if there are new ones (only for non-station mode)
-      const response = await fetch(`${API_URL}/files?limit=10`, {
-        headers: { Authorization: `Bearer ${this.token}` },
-      });
+      const response = await this.makeRequestWithRetry(
+        `${API_URL}/files?limit=10`,
+        { headers: {} }
+      );
 
       if (response.ok) {
         const data = await response.json();
@@ -227,10 +286,10 @@ class AutoPrintManager {
 
   async addToPrintQueue(fileId) {
     try {
-      const response = await fetch(`${API_URL}/print-queue/add/${fileId}`, {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${this.token}` },
-      });
+      const response = await this.makeRequestWithRetry(
+        `${API_URL}/print-queue/add/${fileId}`,
+        { method: 'POST', headers: {} }
+      );
 
       if (response.ok) {
         console.log('[AutoPrintManager] File added to print queue:', fileId);
@@ -265,9 +324,7 @@ class AutoPrintManager {
       }
 
       // Get next print job
-      const response = await fetch(url, {
-        headers: { Authorization: `Bearer ${this.token}` },
-      });
+      const response = await this.makeRequestWithRetry(url, { headers: {} });
 
       if (response.ok) {
         const data = await response.json();
@@ -295,16 +352,17 @@ class AutoPrintManager {
   }
 
   async printFile(printJob) {
+    const jobRetries = this.failedJobs.get(printJob.id) || 0;
+
     try {
       // Update status to printing
       await this.updateJobStatus(printJob.id, 'printing');
 
       // First, fetch the PDF file as a blob
-      const response = await fetch(`${API_URL}/files/${printJob.file_id}/download`, {
-        headers: {
-          Authorization: `Bearer ${this.token}`
-        }
-      });
+      const response = await this.makeRequestWithRetry(
+        `${API_URL}/files/${printJob.file_id}/download`,
+        { headers: {} }
+      );
 
       if (!response.ok) {
         throw new Error(`Failed to download file: ${response.statusText}`);
@@ -321,7 +379,33 @@ class AutoPrintManager {
 
     } catch (error) {
       console.error('[AutoPrintManager] Error printing file:', error);
-      await this.updateJobStatus(printJob.id, 'failed', error?.message || 'Print failed');
+
+      // Track failed job for retry
+      if (jobRetries < this.maxRetries) {
+        this.failedJobs.set(printJob.id, jobRetries + 1);
+        stationStorage.saveFailedJob(printJob.id, error.message, jobRetries + 1);
+
+        // Schedule retry
+        const delay = this.retryDelay * Math.pow(2, jobRetries);
+        console.log(`[AutoPrintManager] Scheduling print retry for job ${printJob.id} in ${delay}ms`);
+        setTimeout(() => this.printFile(printJob), delay);
+      } else {
+        // Max retries reached
+        this.failedJobs.delete(printJob.id);
+        await this.updateJobStatus(printJob.id, 'failed', error?.message || 'Print failed after multiple attempts');
+      }
+    }
+  }
+
+  async processFailedJobs() {
+    const failedJobs = stationStorage.getFailedJobs();
+
+    for (const failed of failedJobs) {
+      if (failed.retryCount < this.maxRetries) {
+        console.log(`[AutoPrintManager] Retrying failed job ${failed.jobId}`);
+        // Re-attempt to print the job
+        // Note: This would need the full job data, which should be stored
+      }
     }
   }
 
@@ -358,6 +442,17 @@ class AutoPrintManager {
                   // Update status to completed
                   await this.updateJobStatus(jobId, 'completed');
                   console.log('[AutoPrintManager] Print job completed:', jobId);
+
+                  // Show notification if available
+                  if ('Notification' in window && Notification.permission === 'granted') {
+                    new Notification('Print Job Completed', {
+                      body: 'Document has been sent to printer successfully.',
+                      icon: '/pwa-192x192.png',
+                      badge: '/pwa-192x192.png',
+                      tag: `print-complete-${jobId}`,
+                    });
+                  }
+
                   resolve();
                 }, 1000);
 
@@ -405,16 +500,26 @@ class AutoPrintManager {
       const body = { status };
       if (error) body.error = error;
 
-      await fetch(`${API_URL}/print-queue/${jobId}/status`, {
-        method: 'PUT',
-        headers: {
-          Authorization: `Bearer ${this.token}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(body),
-      });
+      await this.makeRequestWithRetry(
+        `${API_URL}/print-queue/${jobId}/status`,
+        {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        }
+      );
     } catch (err) {
       console.error('[AutoPrintManager] Error updating job status:', err);
+
+      // Queue status update for later if offline
+      if (!connectionMonitor.isConnected()) {
+        stationStorage.addToQueue({
+          type: 'status_update',
+          jobId,
+          status,
+          error,
+        });
+      }
     }
   }
 

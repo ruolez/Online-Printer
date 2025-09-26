@@ -313,6 +313,18 @@ def verify_token(current_user):
         'username': current_user.username
     }), 200
 
+@app.route('/api/refresh-token', methods=['POST'])
+@token_required
+def refresh_token(current_user):
+    # Generate a new token with updated expiration
+    new_token = current_user.generate_token()
+
+    return jsonify({
+        'token': new_token,
+        'username': current_user.username,
+        'message': 'Token refreshed successfully'
+    }), 200
+
 def allowed_file(filename):
     return '.' in filename and \
            filename.rsplit('.', 1)[1].lower() in app.config['ALLOWED_EXTENSIONS']
@@ -963,6 +975,60 @@ def station_heartbeat(current_user, station_id):
         db.session.rollback()
         return jsonify({'message': 'Error updating heartbeat'}), 500
 
+@app.route('/api/stations/<int:station_id>/reconnect', methods=['POST'])
+@token_required
+def reconnect_station(current_user, station_id):
+    data = request.get_json()
+    old_session_token = data.get('session_token') if data else None
+
+    station = PrinterStation.query.filter_by(
+        id=station_id,
+        user_id=current_user.id
+    ).first()
+
+    if not station:
+        return jsonify({'message': 'Station not found'}), 404
+
+    # Deactivate old session if it exists
+    if old_session_token:
+        old_session = StationSession.query.filter_by(
+            session_token=old_session_token,
+            station_id=station_id
+        ).first()
+        if old_session:
+            old_session.is_active = False
+
+    # Create new session
+    new_session = StationSession(
+        station_id=station_id,
+        session_token=secrets.token_urlsafe(32),
+        is_active=True
+    )
+
+    # Update station status
+    station.status = 'online'
+    station.last_heartbeat = datetime.utcnow()
+
+    try:
+        db.session.add(new_session)
+        db.session.commit()
+
+        return jsonify({
+            'message': 'Station reconnected successfully',
+            'session_token': new_session.session_token,
+            'station': {
+                'id': station.id,
+                'station_name': station.station_name,
+                'station_location': station.station_location,
+                'status': station.status,
+                'created_at': station.created_at.isoformat(),
+                'last_heartbeat': station.last_heartbeat.isoformat() if station.last_heartbeat else None
+            }
+        }), 200
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'message': 'Error reconnecting station'}), 500
+
 @app.route('/api/stations/<int:station_id>', methods=['DELETE'])
 @token_required
 def unregister_station(current_user, station_id):
@@ -1031,7 +1097,10 @@ def get_station_print_queue(current_user, station_id):
     if not station:
         return jsonify({'message': 'Station not found'}), 404
 
-    status_filter = request.args.get('status', 'pending')
+    # Get filter parameters
+    status_filter = request.args.get('status', None)  # No default filter - return all
+    limit = min(int(request.args.get('limit', 50)), 100)  # Max 100 items
+    offset = int(request.args.get('offset', 0))
 
     query = PrintQueue.query.filter_by(
         station_id=station_id,
@@ -1041,11 +1110,120 @@ def get_station_print_queue(current_user, station_id):
     if status_filter:
         query = query.filter_by(status=status_filter)
 
-    print_jobs = query.order_by(PrintQueue.created_at.asc()).limit(20).all()
+    # Order: pending/printing first (oldest first), then completed/failed (newest first)
+    if status_filter in ['pending', 'printing']:
+        query = query.order_by(PrintQueue.created_at.asc())
+    else:
+        query = query.order_by(PrintQueue.created_at.desc())
+
+    # Get total count for pagination
+    total_count = query.count()
+
+    # Apply pagination
+    print_jobs = query.offset(offset).limit(limit).all()
+
+    # Separate jobs by status for frontend
+    pending_jobs = [job.to_dict() for job in print_jobs if job.status == 'pending']
+    printing_jobs = [job.to_dict() for job in print_jobs if job.status == 'printing']
+    completed_jobs = [job.to_dict() for job in print_jobs if job.status == 'completed']
+    failed_jobs = [job.to_dict() for job in print_jobs if job.status == 'failed']
 
     return jsonify({
         'station': station.to_dict(),
-        'print_jobs': [job.to_dict() for job in print_jobs]
+        'print_jobs': [job.to_dict() for job in print_jobs],
+        'jobs_by_status': {
+            'pending': pending_jobs,
+            'printing': printing_jobs,
+            'completed': completed_jobs,
+            'failed': failed_jobs
+        },
+        'pagination': {
+            'total': total_count,
+            'limit': limit,
+            'offset': offset
+        }
+    }), 200
+
+@app.route('/api/print-queue/station/<int:station_id>/history', methods=['GET'])
+@token_required
+def get_station_print_history(current_user, station_id):
+    # Verify station belongs to user
+    station = PrinterStation.query.filter_by(
+        id=station_id,
+        user_id=current_user.id
+    ).first()
+
+    if not station:
+        return jsonify({'message': 'Station not found'}), 404
+
+    # Get filter parameters
+    limit = min(int(request.args.get('limit', 50)), 100)
+    offset = int(request.args.get('offset', 0))
+
+    # Optional date filters
+    from_date = request.args.get('from_date')  # ISO format
+    to_date = request.args.get('to_date')  # ISO format
+
+    # Query for completed and failed jobs only
+    query = PrintQueue.query.filter(
+        PrintQueue.station_id == station_id,
+        PrintQueue.user_id == current_user.id,
+        PrintQueue.status.in_(['completed', 'failed'])
+    )
+
+    # Apply date filters if provided
+    if from_date:
+        try:
+            from_dt = datetime.fromisoformat(from_date)
+            query = query.filter(PrintQueue.created_at >= from_dt)
+        except ValueError:
+            pass
+
+    if to_date:
+        try:
+            to_dt = datetime.fromisoformat(to_date)
+            query = query.filter(PrintQueue.created_at <= to_dt)
+        except ValueError:
+            pass
+
+    # Order by newest first for history
+    query = query.order_by(PrintQueue.printed_at.desc().nullslast(), PrintQueue.created_at.desc())
+
+    # Get total count for pagination
+    total_count = query.count()
+
+    # Apply pagination
+    history_jobs = query.offset(offset).limit(limit).all()
+
+    # Calculate statistics
+    stats = {
+        'total_printed': PrintQueue.query.filter_by(
+            station_id=station_id,
+            user_id=current_user.id,
+            status='completed'
+        ).count(),
+        'total_failed': PrintQueue.query.filter_by(
+            station_id=station_id,
+            user_id=current_user.id,
+            status='failed'
+        ).count(),
+        'last_24h': PrintQueue.query.filter(
+            PrintQueue.station_id == station_id,
+            PrintQueue.user_id == current_user.id,
+            PrintQueue.status == 'completed',
+            PrintQueue.printed_at >= datetime.utcnow() - timedelta(days=1)
+        ).count()
+    }
+
+    return jsonify({
+        'station': station.to_dict(),
+        'history': [job.to_dict() for job in history_jobs],
+        'stats': stats,
+        'pagination': {
+            'total': total_count,
+            'limit': limit,
+            'offset': offset
+        }
     }), 200
 
 if __name__ == '__main__':

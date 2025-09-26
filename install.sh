@@ -1051,17 +1051,32 @@ with app.app_context():
         docker compose -f docker-compose.prod.yml exec -T backend python /app/migrations/remove_device_mode.py || print_message $YELLOW "Device mode migration may have already been applied"
     fi
 
-    # Create default admin user for admin dashboard
-    print_message $YELLOW "Creating admin user for dashboard..."
-    docker compose -f docker-compose.prod.yml exec -T postgres psql -U "$DB_USER" -d "$DB_NAME" << EOF
+    # Run admin features migration (adds is_admin, is_active columns and creates admin user)
+    if [[ -f "backend/migrations/add_admin_features.py" ]]; then
+        print_message $YELLOW "Setting up admin features and creating admin user..."
+        docker compose -f docker-compose.prod.yml exec -T backend python /app/migrations/add_admin_features.py
+        if [ $? -eq 0 ]; then
+            print_message $GREEN "Admin features installed successfully"
+            print_message $GREEN "Admin user created (username: admin, password: admin123)"
+            print_message $YELLOW "⚠️  IMPORTANT: Change the admin password after first login!"
+        else
+            print_message $YELLOW "Admin features may have already been installed"
+
+            # Fallback: Try to create admin user with SQL if migration didn't create it
+            print_message $YELLOW "Ensuring admin user exists..."
+            docker compose -f docker-compose.prod.yml exec -T postgres psql -U "$DB_USER" -d "$DB_NAME" << EOF
 INSERT INTO users (username, password_hash, is_admin, is_active, created_at)
 VALUES ('admin', '\$2b\$12\$kP5vy623kLEAI04SC26UMefzX//TgQ3snia/zIorU/erK2WwQM30y', true, true, NOW())
 ON CONFLICT (username) DO UPDATE
-SET password_hash = '\$2b\$12\$kP5vy623kLEAI04SC26UMefzX//TgQ3snia/zIorU/erK2WwQM30y',
-    is_admin = true,
+SET is_admin = true,
     is_active = true;
 EOF
-    print_message $GREEN "Admin user created (username: admin, password: admin123)"
+            print_message $GREEN "Admin user ensured (username: admin, password: admin123)"
+        fi
+    else
+        print_message $RED "Warning: Admin features migration file not found"
+        print_message $YELLOW "Admin dashboard may not function properly"
+    fi
 
     print_message $GREEN "Database initialization completed"
 }

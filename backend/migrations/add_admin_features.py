@@ -108,7 +108,7 @@ def run_migration():
 
             if not result:
                 print("Creating default admin user...")
-                password_hash = generate_password_hash('admin')
+                password_hash = generate_password_hash('admin123')
                 db.session.execute(text("""
                     INSERT INTO users (username, password_hash, is_admin, is_active, created_at)
                     VALUES (:username, :password_hash, true, true, CURRENT_TIMESTAMP)
@@ -117,7 +117,7 @@ def run_migration():
                     'password_hash': password_hash
                 })
                 db.session.commit()
-                print("✅ Created admin user (username: admin, password: admin)")
+                print("✅ Created admin user (username: admin, password: admin123)")
                 print("⚠️  IMPORTANT: Change the admin password after first login!")
             else:
                 print("✅ Admin user already exists")
@@ -156,7 +156,7 @@ def run_migration():
             print("\n📌 Admin Dashboard Access:")
             print("   URL: http://localhost:8080/admin")
             print("   Username: admin")
-            print("   Password: admin")
+            print("   Password: admin123")
             print("\n⚠️  Remember to change the admin password after first login!")
 
         except Exception as e:

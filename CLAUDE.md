@@ -4,333 +4,143 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Development Commands
 
-### Docker Management
+### Quick Start
 ```bash
-# Start all services
+# Start all services with Docker
 docker-compose up -d --build
 
+# Restart after code changes
+docker-compose restart backend   # For backend changes
+docker-compose restart frontend  # For frontend changes
+
 # View logs
-docker-compose logs -f [service_name]  # service_name: backend, frontend, postgres, nginx, redis
-
-# Restart specific service after code changes
-docker-compose restart [service_name]
-
-# Complete restart with rebuild
-docker-compose down && docker-compose up -d --build
-
-# Reset database completely
-docker-compose down -v && docker-compose up -d
-
-# Check container health
-docker-compose ps
+docker-compose logs -f [service_name]  # backend, frontend, postgres, nginx, redis
 ```
 
 ### Frontend Development
 ```bash
-# Install new npm packages (execute in container)
+# Install packages in container
 docker exec webapp_frontend npm install [package_name]
 
-# Run frontend directly (for debugging) - use port 5173
-cd frontend && npm run dev
-
-# Build for production
-cd frontend && npm run build
-
-# Lint frontend code
-cd frontend && npm run lint
-
-# Preview production build
-cd frontend && npm run preview
-
-# Install packages locally (when container has issues)
-cd frontend && npm install framer-motion  # Example for missing packages
+# Run locally for debugging
+cd frontend && npm run dev    # Port 5173
+cd frontend && npm run build  # Production build
+cd frontend && npm run lint   # Lint check
 ```
 
 ### Backend Development
 ```bash
-# Install new Python packages (execute in container)
+# Install Python packages in container
 docker exec webapp_backend pip install [package_name]
-# Remember to update backend/requirements.txt
+# Update backend/requirements.txt after installing
 
-# Access Flask shell
-docker exec -it webapp_backend python
-
-# Run database migrations
+# Run migrations
 docker exec webapp_backend python /app/migrations/add_printer_stations.py
 docker exec webapp_backend python /app/migrations/remove_device_mode.py
 
-# Create database tables
-docker exec webapp_backend python -c "from app import db; db.create_all()"
-
-# Test API endpoints directly
+# Test API endpoints
 curl -X POST http://localhost:5000/api/login -H "Content-Type: application/json" -d '{"username":"test","password":"test123"}'
 ```
 
-### Database Access
+### Database Management
 ```bash
-# Access PostgreSQL database
+# Access PostgreSQL
 docker exec webapp_postgres psql -U webapp_user -d webapp
 
-# Query users table
-docker exec webapp_postgres psql -U webapp_user -d webapp -c "SELECT username FROM users;"
+# Reset database completely
+docker-compose down -v && docker-compose up -d
 
-# Database credentials
-# User: webapp_user
-# Password: webapp_password
-# Database: webapp
-# Port: 5433 (external), 5432 (internal)
+# Credentials: webapp_user / webapp_password / webapp / port 5433
 ```
 
 ## Architecture Overview
 
-### Tech Stack
-- **Frontend**:
-  - React 19 with Vite
-  - Tailwind CSS v3 with custom dark theme
-  - shadcn/ui components, Radix UI primitives
-  - Framer Motion for animations
-  - Vite PWA plugin for Progressive Web App
-- **Backend**:
-  - Flask with SQLAlchemy ORM
-  - JWT authentication (24-hour expiry)
-  - bcrypt password hashing
-  - python-magic for file validation
-- **Database**: PostgreSQL 15
-- **Cache/Queue**: Redis 7 (prepared for Celery but worker not running)
-- **Proxy**: Nginx (reverse proxy)
+### Services & Ports
+- **Frontend**: React 19 + Vite + Tailwind CSS (port 5173)
+- **Backend**: Flask + SQLAlchemy + JWT (port 5000)
+- **Database**: PostgreSQL 15 (port 5433 external, 5432 internal)
+- **Proxy**: Nginx (port 8080)
+- **Cache**: Redis 7 (port 6380)
 
-### Port Configuration
-- **5173**: Vite dev server (✅ use this for development)
-- **8080**: Nginx proxy (⚠️ HMR WebSocket issues)
-- **5000**: Flask backend API
-- **5433**: PostgreSQL (mapped from internal 5432)
-- **6380**: Redis (mapped from internal 6379)
+### Key Application Systems
 
-### Container Architecture
-```
-webapp_nginx (8080) ──┬──> webapp_frontend (5173) [Vite + React]
-                      └──> webapp_backend (5000) [Flask API]
-                             ├──> webapp_postgres (5433) [PostgreSQL]
-                             └──> webapp_redis (6380) [Redis]
-```
+#### Print Queue System
+- Jobs flow through statuses: `pending` → `printing` → `completed`/`failed`
+- Backend endpoints:
+  - `/api/print-queue` - Get user's print jobs
+  - `/api/print-queue/station/<id>` - Get station jobs with status filtering
+  - `/api/print-queue/station/<id>/history` - Get completed/failed jobs with stats
+  - `/api/print-queue/next?station_id=X` - Poll for next job
+- Jobs are never deleted, only status changes (maintains audit trail)
 
-## Core Application Features
+#### Printer Station System
+- Stations register via `/api/stations/register` with unique tokens
+- Heartbeat every 30 seconds to maintain online status
+- Station data stored in localStorage: `printerStation` key
+- Auto-print always enabled for stations (bypasses user settings)
+- Frontend component: `PrinterStation.jsx` with tabbed UI for queue/history
 
-### Device Mode System (Local-Only Setting)
-- **Device Modes** (stored in localStorage, NOT database):
-  - **Sender**: Upload files to send to remote printer stations (defaults to "Files" tab)
-  - **Printer Station**: Receive and print jobs from remote senders
-  - **Hybrid**: Both send and receive print jobs (defaults to "Overview" tab)
-- **Per-Device Independence**: Same user can have different modes on different devices
-- **Mode Persistence**: Uses localStorage key `deviceMode`, survives browser restarts
-- **No Server Sync**: Device mode is never sent to or retrieved from the backend
+#### Device Mode System (localStorage only)
+- Three modes: Sender, Printer Station, Hybrid
+- Stored in `deviceMode` localStorage key
+- NO database storage (migration removed `device_mode` column)
+- Each device/browser maintains independent mode
 
-### Remote Printer Station System
-- **Station Management**: Registration, heartbeat monitoring, online/offline status
-- **Print Job Routing**: Station-specific or local printing based on current device mode
-- **Session Management**: Token-based sessions for printer stations
-- **Auto-Print for Stations**: Printer stations always have auto-print enabled regardless of user settings
+#### PWA & Auto-Print
+- Auto-print ONLY works in PWA mode (prevents duplicates)
+- Detection via `isPWA()` utility function
+- `AutoPrintManager` singleton service:
+  - Polls every 10 seconds for new jobs
+  - Tracks processed files in localStorage
+  - Shows notifications on print completion
 
-### Progressive Web App (PWA)
-- **Auto-print capability**: Only works in PWA mode to prevent multiple browser instances
-- **PWA Detection**: Uses `isPWA()` utility in `/frontend/src/utils/pwaDetection.js`
-- **Service Worker**: Auto-generated with Workbox for offline support
-- **Installation**: Install prompt component appears bottom-right (small badge when installed)
-
-### Dark Theme System
-- **Theme Provider**: Context-based theme management in `/frontend/src/components/theme-provider.jsx`
-- **Animated Toggle**: Theme toggle button with Framer Motion animations (top-right corner)
-- **Animated Background**: Particle animation system for dark mode in `/frontend/src/components/AnimatedBackground.jsx`
-- **Color Scheme**: Purple accent colors with glass morphism effects in dark mode
-- **CSS Variables**: Defined in `/frontend/src/index.css` with HSL color system
-
-### Printing System
-- **Native Browser Printing**: Uses iframe + window.print() (print-js removed due to PWA issues)
-- **Auto-Print Manager**: Singleton service (`/frontend/src/services/AutoPrintManager.js`)
-  - Polls every 10 seconds for new files and pending jobs
-  - Only runs in PWA mode
-  - Stores processed files in localStorage
-  - Prevents duplicate printing with job scheduling
-  - Supports station-specific routing in hybrid mode
-  - **Station Mode**: Always enabled for printer stations (bypasses user auto-print setting)
-  - **Initialization**: PrinterStation component initializes with `autoPrintManager.init(token, stationId)`
-- **Print Queue**: Database-backed queue with status tracking
-- **Print Settings**: User-configurable orientation, copies, auto-print toggle (except stations always auto-print)
-
-### Authentication Flow
-1. User registers/logs in → Backend validates → Returns JWT token
-2. Token stored in localStorage as `authToken`
-3. Token sent as `Authorization: Bearer [token]` header
-4. Backend validates token using `@token_required` decorator
-5. Token expiry: 24 hours
-
-### File Upload System
-1. PDF-only uploads with configurable size limit (UserSettings table)
-2. Files stored in `/app/uploads/<user_id>/` directory structure
-3. File hash calculated for integrity verification
-4. MIME type validation using python-magic
-5. Status tracking: pending → processing → completed/failed
-6. Foreign key relationships with print_queue table
-
-## API Endpoints
-
-### Authentication
-- `POST /api/register` - Register new user
-- `POST /api/login` - Login user
-- `GET /api/profile` - Get user profile (requires auth)
-- `GET /api/verify` - Verify JWT token
-
-### File Management
-- `POST /api/upload` - Upload PDF file
-- `GET /api/files` - List user's files (supports pagination)
-- `GET /api/files/<id>` - Get specific file details
-- `DELETE /api/files/<id>` - Delete file (auto-deletes related print jobs)
-- `GET /api/files/<id>/download` - Download file
-
-### Settings
-- `GET /api/settings` - Get user settings (NO device mode included)
-- `PUT /api/settings` - Update user settings (NO device mode accepted)
-
-### Print Queue
-- `GET /api/print-queue` - List print jobs
-- `POST /api/print-queue/add/<file_id>` - Add file to queue
-- `PUT /api/print-queue/<job_id>/status` - Update job status
-- `DELETE /api/print-queue/<job_id>` - Remove from queue
-- `GET /api/print-queue/next` - Get next pending job (supports station_id parameter)
-
-### Printer Stations
-- `POST /api/stations/register` - Register new printer station
-- `GET /api/stations` - List all stations for user
-- `GET /api/stations/<id>` - Get station details
-- `PUT /api/stations/<id>/heartbeat` - Send heartbeat (keeps station online)
-- `POST /api/stations/unregister` - Unregister station
-- `GET /api/print-queue/station/<station_id>` - Get jobs for specific station
+#### Authentication
+- JWT tokens with 24-hour expiry
+- Stored in localStorage as `authToken`
+- Flask uses werkzeug password hashing
+- Token required for all `/api/*` endpoints except login/register
 
 ## Database Schema
 
-Six main tables with foreign key relationships:
-- `users` - User accounts with auth credentials
-- `uploaded_files` - PDF file metadata and status
-- `user_settings` - Per-user configuration (file size limits, print settings - NO device mode)
-- `print_queue` - Print job tracking with FK to users, uploaded_files, and printer_stations
-- `printer_stations` - Remote printer stations with capabilities and status
-- `station_sessions` - Session management for printer stations
+### Core Tables
+- `users` - User accounts
+- `uploaded_files` - PDF file metadata
+- `print_queue` - Print jobs (FK: users, uploaded_files, printer_stations)
+- `printer_stations` - Registered stations
+- `user_settings` - Per-user config (NO device_mode column)
 
-Key relationships:
-- uploaded_files.user_id → users.id
-- user_settings.user_id → users.id (unique)
-- print_queue.user_id → users.id
-- print_queue.file_id → uploaded_files.id
-- print_queue.station_id → printer_stations.id
-- printer_stations.user_id → users.id
-- station_sessions.station_id → printer_stations.id
+### Important FK Constraints
+When deleting users/files, must delete related `print_queue` entries first to avoid FK errors.
 
-## Recent Architecture Changes
+## Frontend Components
 
-### Device Mode Migration (Local-Only)
-- **Previous**: Device mode was stored in database `user_settings.device_mode` column
-- **Current**: Device mode is stored only in localStorage, allowing per-device settings
-- **Migration**: Run `remove_device_mode.py` to drop the database column
-- **Frontend Changes**: All components now read/write directly to localStorage
-- **Backend Changes**: Removed all device_mode references from API endpoints
+### UI Components (shadcn/ui pattern)
+- Located in `frontend/src/components/ui/`
+- Import utils as: `import { cn } from "../../lib/utils"`
+- Uses Radix UI primitives (@radix-ui/react-*)
 
-### Auto-Print Fixes for Printer Stations
-- **Issue**: Printer stations weren't auto-printing received jobs
-- **Root Cause**: AutoPrintManager wasn't being initialized for stations
-- **Fix**: PrinterStation component now initializes AutoPrintManager with station ID
-- **Backend Fix**: `/api/print-queue/next` endpoint now bypasses auto_print check for stations
+### Key Components
+- `PrinterStation.jsx` - Station management with queue/history tabs
+- `AutoPrintManager.js` - Singleton service for auto-printing
+- `DeviceModeSelector.jsx` - Local device mode switching
+- `PrintQueue.jsx` - User's print queue display
 
-## Known Issues & Solutions
+## Recent Changes
 
-### Frontend not accessible on port 8080
-Use `http://localhost:5173` for development (Nginx proxy has HMR WebSocket issues).
+### Print History Feature (Latest)
+- Added tabbed interface for Active Queue vs Print History
+- Visual status indicators (pending, printing, completed, failed)
+- Print statistics (total printed, failed, last 24h)
+- Jobs remain in database after completion for audit trail
 
-### Login/Import errors (e.g., "AnimatedBackground not defined")
-1. Check imports in App.jsx are correct
-2. Ensure framer-motion is installed: `docker exec webapp_frontend npm install framer-motion`
-3. Restart frontend: `docker-compose restart frontend`
+### Device Mode Migration
+- Removed database storage of device mode
+- All device mode logic uses localStorage only
+- Migration: `backend/migrations/remove_device_mode.py`
 
-### Theme toggle overlapping with logout button
-Fixed with spacer div and responsive margins. Theme toggle is fixed-position with z-[60].
-
-### Delete file fails with foreign key constraint
-File deletion endpoint automatically deletes related print_queue entries first.
-
-### Auto-print triggering duplicate prints
-Fixed by adding isPrinting flag and scheduledJobs tracking to prevent concurrent print attempts.
-
-### Files stuck in "pending" status
-Celery worker not running. Files marked as 'completed' immediately on upload.
-
-### Container startup failures
-1. Check port conflicts: `docker ps -a`
-2. Verify logs: `docker-compose logs [service_name]`
-3. Ensure Node.js 20+ in frontend Dockerfile
-4. Check Redis health: `docker exec webapp_redis redis-cli ping`
-
-### ReferenceError: isPWA is not defined
-Add missing import in App.jsx: `import { isPWA } from "./utils/pwaDetection";`
-
-### AttributeError: 'UserSettings' object has no attribute 'device_mode'
-Backend still has references to removed device_mode field. Check:
-1. UserSettings model definition
-2. Settings API endpoints
-3. Run `remove_device_mode.py` migration
-
-### Printer Station Not Auto-Printing
-1. Verify PrinterStation component initializes AutoPrintManager
-2. Check browser console for AutoPrintManager logs
-3. Ensure station is in PWA mode (auto-print only works in PWA)
-4. Verify `/api/print-queue/next?station_id=X` returns pending jobs
-
-## Environment Variables
-
-Backend (docker-compose.yml):
-- `DATABASE_URL`: postgresql://webapp_user:webapp_password@postgres:5432/webapp
-- `FLASK_ENV`: development
-- `SECRET_KEY`: JWT secret (change in production)
-- `REDIS_URL`: Redis connection
-- `CELERY_BROKER_URL`: Redis URL for Celery broker
-- `CELERY_RESULT_BACKEND`: Redis URL for Celery results
-
-Frontend:
-- `CHOKIDAR_USEPOLLING`: true (for Docker file watching)
-
-## Important Implementation Notes
-
-### PWA-Only Auto-Print
-Auto-printing restricted to PWA instances to prevent multiple browser tabs from printing same files. AutoPrintManager checks `isPWA()` before initializing.
-
-### Native Printing Implementation
-Due to print-js library issues with Chrome PWA on Windows:
-- Creates hidden iframe with PDF blob URL
-- Calls `window.print()` on iframe content window
-- Cleans up resources after printing
-
-### Print Queue Foreign Keys
-When deleting files, backend first deletes related print_queue entries due to FK constraints. Handled automatically in delete endpoint.
-
-### Print Queue Routing
-- The `/api/print-queue/next` endpoint behavior:
-  - With `station_id` parameter: Returns jobs for that specific station (printer station mode)
-  - Without `station_id`: Returns local jobs for the user
-  - **Station Auto-Print**: Always enabled when station_id is provided, bypasses user settings
-  - **User Auto-Print**: Only checks auto_print_enabled setting for non-station requests
-
-### localStorage Keys
+## localStorage Keys
 - `authToken` - JWT authentication token
-- `deviceMode` - Current device mode (sender/printer/hybrid)
-- `defaultPrinterStation` - Default station ID for sending files
-- `printerStation` - Registered station data (for printer mode)
-- `stationSessionToken` - Session token for station heartbeats
-- `isPWA`, `displayMode` - PWA detection status
-- `autoPrintCheckedFiles` - Processed files for auto-print
-- `app-ui-theme` - Theme preference (light/dark)
-- `pwa-prompt-dismissed` - PWA install prompt dismissal timestamp
-
-### AutoPrintManager Station Support
-- **Station Initialization**: PrinterStation component calls `autoPrintManager.init(token, stationId)`
-- **Station Polling**: Uses `/api/print-queue/station/<station_id>` to check for pending jobs
-- **Auto-Print Override**: Stations always auto-print regardless of user's auto_print_enabled setting
-- **Dual Mode Support**: In hybrid mode, polls for both station-specific and local jobs
-- **Print Execution**: Uses `/api/print-queue/next?station_id=X` to fetch next job for printing
+- `deviceMode` - Current mode (sender/printer/hybrid)
+- `printerStation` - Station registration data
+- `autoPrintCheckedFiles` - Processed file IDs
+- `app-ui-theme` - Theme preference

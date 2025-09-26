@@ -37,13 +37,77 @@ export default defineConfig({
         globPatterns: ['**/*.{js,css,html,ico,png,svg,pdf}'],
         runtimeCaching: [
           {
+            urlPattern: /^\/api\/health/,
+            handler: 'NetworkFirst',
+            options: {
+              cacheName: 'health-cache',
+              networkTimeoutSeconds: 3,
+              expiration: {
+                maxEntries: 1,
+                maxAgeSeconds: 60
+              },
+              cacheableResponse: {
+                statuses: [0, 200]
+              }
+            }
+          },
+          {
+            urlPattern: /^\/api\/stations.*\/heartbeat/,
+            handler: 'NetworkOnly',
+            method: 'PUT',
+            options: {
+              backgroundSync: {
+                name: 'heartbeat-queue',
+                options: {
+                  maxRetentionTime: 24 * 60 // Retry for 24 hours
+                }
+              },
+              plugins: [{
+                handlerDidError: async () => {
+                  // Return a custom offline response
+                  return new Response(
+                    JSON.stringify({ status: 'queued', message: 'Heartbeat queued for sync' }),
+                    { headers: { 'Content-Type': 'application/json' } }
+                  );
+                }
+              }]
+            }
+          },
+          {
+            urlPattern: /^\/api\/print-queue/,
+            handler: 'NetworkFirst',
+            options: {
+              cacheName: 'print-queue-cache',
+              networkTimeoutSeconds: 5,
+              expiration: {
+                maxEntries: 10,
+                maxAgeSeconds: 300
+              },
+              cacheableResponse: {
+                statuses: [0, 200]
+              },
+              plugins: [{
+                handlerDidError: async () => {
+                  // Return cached data if available when offline
+                  const cache = await caches.open('print-queue-cache');
+                  const cachedResponse = await cache.match('/api/print-queue');
+                  return cachedResponse || new Response(
+                    JSON.stringify({ print_jobs: [], message: 'Offline - showing cached data' }),
+                    { headers: { 'Content-Type': 'application/json' } }
+                  );
+                }
+              }]
+            }
+          },
+          {
             urlPattern: /^\/api\//,
             handler: 'NetworkFirst',
             options: {
               cacheName: 'api-cache',
+              networkTimeoutSeconds: 10,
               expiration: {
-                maxEntries: 10,
-                maxAgeSeconds: 300
+                maxEntries: 50,
+                maxAgeSeconds: 600
               },
               cacheableResponse: {
                 statuses: [0, 200]
@@ -61,10 +125,22 @@ export default defineConfig({
               },
               cacheableResponse: {
                 statuses: [0, 200]
-              }
+              },
+              plugins: [{
+                cacheWillUpdate: async ({ response }) => {
+                  // Only cache PDFs that are fully downloaded
+                  if (response && response.ok) {
+                    return response;
+                  }
+                  return null;
+                }
+              }]
             }
           }
-        ]
+        ],
+        skipWaiting: true,
+        clientsClaim: true,
+        cleanupOutdatedCaches: true
       },
       devOptions: {
         enabled: true
