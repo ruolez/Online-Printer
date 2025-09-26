@@ -142,7 +142,7 @@ def run_migration():
                     import json
                     db.session.execute(text("""
                         INSERT INTO system_settings (key, value, description)
-                        VALUES (:key, :value::json, :description)
+                        VALUES (:key, CAST(:value AS json), :description)
                     """), {
                         'key': key,
                         'value': json.dumps(value),
