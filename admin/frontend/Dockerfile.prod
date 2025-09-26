@@ -30,10 +30,11 @@ COPY --from=builder /app/dist ./dist
 RUN addgroup -g 1001 -S nodejs && \
     adduser -S nodejs -u 1001
 
-USER nodejs
-
-# Serve static files
+# Install serve as root before switching user
 RUN npm install -g serve
+
+# Switch to non-root user
+USER nodejs
 
 EXPOSE 3000
 
