@@ -235,6 +235,52 @@ def token_required(f):
 def health():
     return jsonify({'status': 'healthy'}), 200
 
+# Admin authentication decorator
+def admin_required(f):
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        token = None
+        if 'Authorization' in request.headers:
+            token = request.headers['Authorization'].replace('Bearer ', '')
+
+        if not token:
+            return jsonify({'message': 'Token is missing!'}), 401
+
+        try:
+            data = jwt.decode(token, app.config['SECRET_KEY'], algorithms=['HS256'])
+            # Check if user is admin
+            user = User.query.get(data['user_id'])
+
+            if not user:
+                return jsonify({'message': 'Invalid token'}), 401
+
+            # Use raw SQL to check admin status directly
+            from sqlalchemy import text
+            result = db.session.execute(
+                text("SELECT is_admin FROM users WHERE id = :id"),
+                {'id': user.id}
+            ).first()
+
+            if not result or not result[0]:
+                return jsonify({'message': 'Admin access required!'}), 403
+
+            request.current_user = user
+        except Exception as e:
+            print(f"Admin auth error: {e}")
+            return jsonify({'message': 'Token is invalid!'}), 401
+
+        return f(*args, **kwargs)
+    return decorated
+
+@app.route('/api/admin/check', methods=['GET'])
+@admin_required
+def admin_check():
+    """Check if user is admin"""
+    return jsonify({
+        'is_admin': True,
+        'username': request.current_user.username
+    })
+
 @app.route('/api/register', methods=['POST'])
 def register():
     data = request.get_json()
