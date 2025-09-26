@@ -1,6 +1,9 @@
 import axios from 'axios';
 
-const API_BASE_URL = 'http://localhost:8001';
+// Use relative URL for production, or environment variable for development
+const API_BASE_URL = process.env.NODE_ENV === 'production'
+  ? '/admin/api'  // In production, use the nginx proxy path
+  : (import.meta.env.VITE_API_URL || 'http://localhost:8000');  // In dev, use env var or default
 
 const api = axios.create({
   baseURL: API_BASE_URL,
@@ -194,9 +197,11 @@ export const audit = {
 
 // WebSocket connection for real-time updates
 export const connectWebSocket = (onMessage) => {
-  const wsUrl = window.location.protocol === 'https:'
-    ? `wss://${window.location.host}/admin/api/ws`
-    : `ws://${window.location.host}/admin/api/ws`;
+  // Use the same pattern as API_BASE_URL but for WebSocket
+  const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const wsUrl = process.env.NODE_ENV === 'production'
+    ? `${wsProtocol}//${window.location.host}/admin/api/ws`
+    : `${wsProtocol}//${window.location.hostname}:8000/ws`;  // Dev uses port 8000 directly
 
   const ws = new WebSocket(wsUrl);
 
