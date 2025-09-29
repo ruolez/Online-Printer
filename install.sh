@@ -940,6 +940,10 @@ upstream backend {
     server backend:5000;
 }
 
+upstream admin_backend {
+    server admin_backend:8000;
+}
+
 # HTTP server for initial certificate obtaining
 server {
     listen 80;
@@ -955,7 +959,39 @@ server {
         root /var/www/certbot;
     }
 
-    # API proxy
+    # Admin API proxy
+    location /admin/api {
+        proxy_pass http://admin_backend/;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_buffering off;
+        rewrite ^/admin/api/(.*)$ /$1 break;
+    }
+
+    # Admin WebSocket
+    location /admin/ws {
+        proxy_pass http://admin_backend/ws;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    # Admin frontend
+    location /admin {
+        alias /usr/share/nginx/admin;
+        try_files $uri $uri/ /admin/index.html;
+    }
+
+    # Main app API proxy
     location /api {
         proxy_pass http://backend;
         proxy_set_header Host $host;
@@ -968,13 +1004,18 @@ server {
         proxy_buffering off;
     }
 
-    # Health check endpoint
+    # Health check endpoints
     location /health {
         proxy_pass http://backend/health;
         access_log off;
     }
 
-    # SPA routing
+    location /admin/health {
+        proxy_pass http://admin_backend/health;
+        access_log off;
+    }
+
+    # Main app SPA routing
     location / {
         try_files $uri $uri/ /index.html;
     }
