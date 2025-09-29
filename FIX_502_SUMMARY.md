@@ -1,30 +1,40 @@
-# Fix for 502 Bad Gateway Error - Admin Login
+# Fix for 502/404 Errors - Admin Login
 
 ## The Problem
-When accessing `https://goallsy.com/admin/api/auth/login`, nginx was returning a 502 Bad Gateway error.
+When accessing `https://goallsy.com/admin/api/auth/login`, nginx was returning either:
+- 502 Bad Gateway error (with the rewrite rule)
+- 404 Not Found error (after removing just the rewrite rule)
 
 ## Root Cause
-The nginx configuration had a conflict between the `proxy_pass` directive with a trailing slash and a `rewrite` rule. This caused malformed requests to be sent to the admin backend.
+The nginx configuration had TWO issues:
+1. A conflict between `proxy_pass` with trailing slash and a `rewrite` rule (caused 502)
+2. Missing trailing slash in the location directive (caused 404 after removing rewrite)
 
-### The Problematic Configuration:
+### The Problematic Configurations:
+
+**Configuration 1 (causes 502):**
 ```nginx
-location /admin/api/ {
+location /admin/api {  # Missing trailing slash
     proxy_pass http://admin_backend/;
-    rewrite ^/admin/api/(.*)$ /$1 break;  # THIS WAS THE PROBLEM
+    rewrite ^/admin/api/(.*)$ /$1 break;  # Conflicts with proxy_pass
 }
 ```
 
-When nginx processes `/admin/api/auth/login`:
-1. The location matches `/admin/api/`
-2. The rewrite rule changes it to `/auth/login`
-3. But proxy_pass with trailing slash ALSO strips `/admin/api/`
-4. Result: The backend receives a malformed/empty request → 502 error
+**Configuration 2 (causes 404):**
+```nginx
+location /admin/api {  # Still missing trailing slash!
+    proxy_pass http://admin_backend/;
+    # Removed rewrite but location still wrong
+}
+```
 
 ## The Solution
-Remove the conflicting `rewrite` rule and let `proxy_pass` with trailing slash handle the path rewriting:
+The correct configuration requires BOTH:
+1. Trailing slash on the location directive: `/admin/api/`
+2. No rewrite rule (let proxy_pass handle path stripping)
 
 ```nginx
-location /admin/api/ {
+location /admin/api/ {  # ← Trailing slash is CRITICAL
     proxy_pass http://admin_backend/;
     # No rewrite rule needed - proxy_pass with trailing slash handles it
     proxy_set_header Host $host;
@@ -34,6 +44,11 @@ location /admin/api/ {
 }
 ```
 
+When nginx processes `/admin/api/auth/login` with the correct config:
+1. Location `/admin/api/` matches (with trailing slash)
+2. Proxy_pass strips `/admin/api/` and appends `auth/login`
+3. Backend receives correct request: `/auth/login`
+
 ## How to Apply the Fix on Your Production Server
 
 ### Option 1: Quick Fix (Manual)
@@ -42,8 +57,22 @@ location /admin/api/ {
    ```bash
    sudo nano /opt/printer.online/nginx/nginx.current.conf
    ```
-3. Find the `/admin/api/` location block (around line 691)
-4. Remove the line: `rewrite ^/admin/api/(.*)$ /$1 break;`
+3. Find the admin API location block (around line 691)
+4. Make sure it looks EXACTLY like this:
+   ```nginx
+   location /admin/api/ {  # ← Must have trailing slash
+       proxy_pass http://admin_backend/;
+       # NO rewrite rule should be here
+       proxy_set_header Host $host;
+       proxy_set_header X-Real-IP $remote_addr;
+       proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+       proxy_set_header X-Forwarded-Proto $scheme;
+       proxy_http_version 1.1;
+       proxy_set_header Upgrade $http_upgrade;
+       proxy_set_header Connection "upgrade";
+       proxy_buffering off;
+   }
+   ```
 5. Save the file
 6. Restart nginx:
    ```bash
