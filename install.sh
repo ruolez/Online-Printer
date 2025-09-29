@@ -688,7 +688,7 @@ server {
     client_max_body_size 100M;
 
     # Admin API proxy
-    location /admin/api {
+    location /admin/api/ {
         proxy_pass http://admin_backend/;
         proxy_set_header Host \$host;
         proxy_set_header X-Real-IP \$remote_addr;
@@ -698,7 +698,6 @@ server {
         proxy_set_header Upgrade \$http_upgrade;
         proxy_set_header Connection "upgrade";
         proxy_buffering off;
-        rewrite ^/admin/api/(.*)$ /\$1 break;
     }
 
     # Admin WebSocket
@@ -960,7 +959,7 @@ server {
     }
 
     # Admin API proxy
-    location /admin/api {
+    location /admin/api/ {
         proxy_pass http://admin_backend/;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
@@ -970,7 +969,6 @@ server {
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection "upgrade";
         proxy_buffering off;
-        rewrite ^/admin/api/(.*)$ /$1 break;
     }
 
     # Admin WebSocket

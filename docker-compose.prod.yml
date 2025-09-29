@@ -107,6 +107,8 @@ services:
       REDIS_URL: redis://redis:6379/0
       CORS_ORIGINS: "https://${DOMAIN_NAME},http://${DOMAIN_NAME}"
       ADMIN_PASSWORD: admin
+    volumes:
+      - uploads:/app/uploads
     networks:
       - printer_network
     depends_on:
