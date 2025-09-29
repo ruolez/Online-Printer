@@ -32,6 +32,7 @@ services:
       CELERY_BROKER_URL: redis://redis:6379/0
       CELERY_RESULT_BACKEND: redis://redis:6379/0
       DOMAIN_NAME: ${DOMAIN_NAME}
+      CORS_ORIGINS: "https://${DOMAIN_NAME},http://${DOMAIN_NAME}"
     volumes:
       - uploads:/app/uploads
       - ./backend/migrations:/app/migrations:ro
@@ -104,6 +105,8 @@ services:
       DATABASE_URL: postgresql://${DB_USER}:${DB_PASSWORD}@postgres:5432/${DB_NAME}
       SECRET_KEY: ${JWT_SECRET_KEY}
       REDIS_URL: redis://redis:6379/0
+      CORS_ORIGINS: "https://${DOMAIN_NAME},http://${DOMAIN_NAME}"
+      ADMIN_PASSWORD: admin
     networks:
       - printer_network
     depends_on:

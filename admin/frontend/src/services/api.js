@@ -3,7 +3,7 @@ import axios from 'axios';
 // Use relative URL for production, or environment variable for development
 const API_BASE_URL = process.env.NODE_ENV === 'production'
   ? '/admin/api'  // In production, use the nginx proxy path
-  : (import.meta.env.VITE_API_URL || 'http://localhost:8000');  // In dev, use env var or default
+  : (import.meta.env.VITE_API_URL || 'http://localhost:3001');  // In dev, use env var or default to exposed port
 
 const api = axios.create({
   baseURL: API_BASE_URL,

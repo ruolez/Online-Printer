@@ -443,6 +443,9 @@ ALLOWED_EXTENSIONS=pdf
 REDIS_MAX_CONNECTIONS=50
 REDIS_DECODE_RESPONSES=true
 
+# CORS Configuration
+CORS_ORIGINS=https://$DOMAIN_NAME,http://$DOMAIN_NAME
+
 # Production Mode
 FLASK_ENV=production
 NODE_ENV=production

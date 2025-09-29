@@ -15,7 +15,10 @@ import secrets
 import json
 
 app = Flask(__name__)
-CORS(app)
+
+# CORS configuration - support both development and production
+cors_origins = os.environ.get('CORS_ORIGINS', '*').split(',')
+CORS(app, origins=cors_origins, supports_credentials=True)
 
 app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get('DATABASE_URL')
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False

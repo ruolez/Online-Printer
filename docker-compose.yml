@@ -30,6 +30,7 @@ services:
       REDIS_URL: redis://redis:6379/0
       CELERY_BROKER_URL: redis://redis:6379/0
       CELERY_RESULT_BACKEND: redis://redis:6379/0
+      CORS_ORIGINS: "*"
     volumes:
       - ./backend:/app
       - uploads:/app/uploads
@@ -74,6 +75,7 @@ services:
       DATABASE_URL: postgresql://webapp_user:webapp_password@postgres:5432/webapp
       SECRET_KEY: admin-secret-key-change-in-production
       ADMIN_PASSWORD: admin
+      CORS_ORIGINS: "http://localhost:3000,http://localhost:3001,http://localhost:3002,http://localhost:5174,http://localhost:8080"
     volumes:
       - ./admin/backend:/app
       - uploads:/app/uploads
@@ -94,9 +96,10 @@ services:
       - ./admin/frontend:/app
       - /app/node_modules
     ports:
-      - "3000:3000"
+      - "3002:5174"
     environment:
       - CHOKIDAR_USEPOLLING=true
+    command: npm run dev -- --host 0.0.0.0 --port 5174
 
   nginx:
     image: nginx:alpine
