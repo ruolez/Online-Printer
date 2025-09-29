@@ -64,19 +64,19 @@ manager = ConnectionManager()
 
 @app.on_event("startup")
 async def startup_event():
-    """Initialize database and create default admin user"""
+    """Initialize database and create/fix default admin user"""
     with engine.connect() as conn:
         # Create tables if they don't exist
         models.Base.metadata.create_all(bind=engine)
 
-        # Check if admin user exists
+        # Check if admin user exists and get password hash
         result = conn.execute(
-            text("SELECT id FROM users WHERE username = 'admin' AND is_admin = true")
+            text("SELECT id, password_hash FROM users WHERE username = 'admin'")
         ).fetchone()
 
         if not result:
-            # Create default admin user
-            password_hash = get_password_hash("admin")
+            # Create default admin user with bcrypt hash
+            password_hash = get_password_hash("admin123")
             conn.execute(
                 text("""
                     INSERT INTO users (username, password_hash, is_admin, is_active, created_at)
@@ -89,9 +89,30 @@ async def startup_event():
                 }
             )
             conn.commit()
-            print("✅ Default admin user created (username: admin, password: admin)")
+            print("✅ Default admin user created (username: admin, password: admin123)")
         else:
-            print("✅ Admin user already exists")
+            user_id, current_hash = result
+            # Check if password hash needs updating from werkzeug to bcrypt
+            if current_hash and current_hash.startswith('pbkdf2:'):
+                print("🔧 Updating admin password from werkzeug to bcrypt format...")
+                new_hash = get_password_hash("admin123")
+                conn.execute(
+                    text("""
+                        UPDATE users
+                        SET password_hash = :hash, is_admin = true, is_active = true
+                        WHERE id = :user_id
+                    """),
+                    {"hash": new_hash, "user_id": user_id}
+                )
+                conn.commit()
+                print("✅ Admin password updated to bcrypt format (password: admin123)")
+            else:
+                # Ensure admin flags are set
+                conn.execute(
+                    text("UPDATE users SET is_admin = true, is_active = true WHERE username = 'admin'")
+                )
+                conn.commit()
+                print("✅ Admin user exists - password verification supports both Flask and FastAPI formats")
 
 @app.get("/health")
 async def health_check():

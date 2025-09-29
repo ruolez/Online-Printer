@@ -9,6 +9,8 @@ from sqlalchemy.orm import Session
 from database import get_db
 import models
 import os
+import hashlib
+import hmac
 
 SECRET_KEY = os.environ.get('SECRET_KEY', 'admin-secret-key-change-in-production')
 ALGORITHM = "HS256"
@@ -30,10 +32,48 @@ class AdminLogin(BaseModel):
     username: str
     password: str
 
+def verify_werkzeug_password(password: str, password_hash: str) -> bool:
+    """Verify a werkzeug-style password hash (compatible with Flask)"""
+    if not password_hash:
+        return False
+
+    # Handle pbkdf2:sha256:iterations$salt$hash format
+    if password_hash.startswith('pbkdf2:sha256:'):
+        parts = password_hash.replace('pbkdf2:sha256:', '').split('$')
+        if len(parts) != 3:
+            return False
+
+        iterations = int(parts[0])
+        salt = parts[1]
+        hash_value = parts[2]
+
+        # Compute hash
+        dk = hashlib.pbkdf2_hmac('sha256',
+                                  password.encode('utf-8'),
+                                  salt.encode('utf-8'),
+                                  iterations)
+        # Compare with stored hash
+        return hmac.compare_digest(dk.hex(), hash_value)
+
+    return False
+
 def verify_password(plain_password, hashed_password):
-    return pwd_context.verify(plain_password, hashed_password)
+    """Verify password - supports both bcrypt (FastAPI) and werkzeug (Flask) formats"""
+    if not hashed_password:
+        return False
+
+    # Check if it's a werkzeug hash (from Flask)
+    if hashed_password.startswith('pbkdf2:'):
+        return verify_werkzeug_password(plain_password, hashed_password)
+
+    # Otherwise try bcrypt (from FastAPI/passlib)
+    try:
+        return pwd_context.verify(plain_password, hashed_password)
+    except:
+        return False
 
 def get_password_hash(password):
+    """Hash a password using bcrypt (FastAPI standard)"""
     return pwd_context.hash(password)
 
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
